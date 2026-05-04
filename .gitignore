@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.db-shm
+*.db-wal
+.env
+node_modules/
+dist/
+psa_debug/
+psa_snapshot.json
+.idea/
+.DS_Store
+*.egg-info/
+.pytest_cache/

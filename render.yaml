@@ -1,0 +1,54 @@
+services:
+  # Main web service — serves both API and built frontend
+  - type: web
+    name: court-survivor
+    runtime: python
+    buildCommand: |
+      pip install -r backend/requirements.txt
+      python -m playwright install chromium
+      cd frontend && npm install && npm run build
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: court-survivor-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENV
+        value: production
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 10080
+
+  # Daily scraper cron job
+  - type: cron
+    name: court-survivor-scraper
+    runtime: python
+    schedule: "0 6 * * *"  # 06:00 UTC daily
+    buildCommand: pip install -r backend/requirements.txt && python -m playwright install chromium
+    startCommand: python -c "
+import asyncio
+from backend.app.database import SessionLocal
+from backend.app.services.scraper_service import run_scraper_and_sync
+
+async def main():
+    db = SessionLocal()
+    try:
+        await run_scraper_and_sync(db)
+    finally:
+        db.close()
+
+asyncio.run(main())
+"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: court-survivor-db
+          property: connectionString
+
+databases:
+  - name: court-survivor-db
+    databaseName: court_survivor
+    user: court_survivor
