@@ -17,8 +17,11 @@ source .venv/bin/activate
 echo "Installing Python dependencies..."
 pip install -r backend/requirements.txt -q
 
-echo "Installing Playwright Chromium..."
-python -m playwright install chromium --quiet 2>/dev/null || python -m playwright install chromium
+echo "Checking Playwright Chromium..."
+if ! python -c "from pathlib import Path; from playwright.sync_api import sync_playwright; p = sync_playwright().start(); browser = p.chromium; exists = Path(browser.executable_path).exists(); p.stop(); raise SystemExit(0 if exists else 1)" 2>/dev/null; then
+    echo "Installing Playwright Chromium..."
+    python -m playwright install chromium
+fi
 
 # Frontend
 if [ ! -d "frontend/node_modules" ]; then

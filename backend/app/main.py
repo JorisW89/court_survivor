@@ -12,6 +12,10 @@ from .models import Base
 from .routers import auth, games, groups, picks, tournaments
 
 
+def get_cors_origins() -> list[str]:
+    return [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create all tables
@@ -44,7 +48,7 @@ app = FastAPI(title="Court Survivor", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,6 +59,11 @@ app.include_router(tournaments.router, prefix="/api/tournaments", tags=["tournam
 app.include_router(games.router, prefix="/api/games", tags=["games"])
 app.include_router(picks.router, prefix="/api/picks", tags=["picks"])
 app.include_router(groups.router, prefix="/api/groups", tags=["groups"])
+
+
+@app.get("/api/health", tags=["health"])
+def health():
+    return {"status": "ok"}
 
 
 # Serve built frontend in production

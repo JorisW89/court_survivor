@@ -1,54 +1,69 @@
 services:
-  # Main web service — serves both API and built frontend
+  # FastAPI backend API
   - type: web
-    name: court-survivor
+    name: court-survivor-api
     runtime: python
     buildCommand: |
       pip install -r backend/requirements.txt
       python -m playwright install chromium
-      cd frontend && npm install && npm run build
     startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: court-survivor-db
-          property: connectionString
+        sync: false
       - key: SECRET_KEY
         generateValue: true
       - key: ENV
         value: production
+      - key: CORS_ORIGINS
+        sync: false
       - key: ALGORITHM
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: 10080
+      - key: PYTHON_VERSION
+        value: 3.12.10
+
+  # React/Vite static frontend
+  - type: web
+    name: court-survivor-web
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
 
   # Daily scraper cron job
   - type: cron
     name: court-survivor-scraper
     runtime: python
     schedule: "0 6 * * *"  # 06:00 UTC daily
-    buildCommand: pip install -r backend/requirements.txt && python -m playwright install chromium
+    buildCommand: |
+      pip install -r backend/requirements.txt
+      python -m playwright install chromium
     startCommand: python -c "
-import asyncio
-from backend.app.database import SessionLocal
-from backend.app.services.scraper_service import run_scraper_and_sync
+      import asyncio
+      from backend.app.database import SessionLocal
+      from backend.app.services.scraper_service import run_scraper_and_sync
 
-async def main():
-    db = SessionLocal()
-    try:
-        await run_scraper_and_sync(db)
-    finally:
-        db.close()
+      async def main():
+          db = SessionLocal()
+          try:
+              await run_scraper_and_sync(db)
+          finally:
+              db.close()
 
-asyncio.run(main())
-"
+      asyncio.run(main())
+      "
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: court-survivor-db
-          property: connectionString
-
-databases:
-  - name: court-survivor-db
-    databaseName: court_survivor
-    user: court_survivor
+        sync: false
+      - key: ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.12.10
