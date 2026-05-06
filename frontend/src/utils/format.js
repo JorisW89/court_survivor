@@ -16,7 +16,7 @@ export function formatDeadline(deadline) {
   try {
     const d = typeof deadline === 'string' ? parseISO(deadline) : deadline
     if (isPast(d)) return 'Deadline passed'
-    return `${format(d, 'd MMM HH:mm')} UTC (${formatDistanceToNow(d, { addSuffix: true })})`
+    return `${format(d, 'd MMM HH:mm')} (${formatDistanceToNow(d, { addSuffix: true })})`
   } catch {
     return deadline
   }

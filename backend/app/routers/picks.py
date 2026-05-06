@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -30,10 +30,6 @@ def submit_pick(
     if round_obj.tournament_id != game.tournament_id or round_obj.division != game.division:
         raise HTTPException(status_code=400, detail="Round does not belong to this game")
 
-    # Check deadline
-    if round_obj.pick_deadline and datetime.utcnow() > round_obj.pick_deadline:
-        raise HTTPException(status_code=400, detail="Pick deadline has passed")
-
     if round_obj.status == "completed":
         raise HTTPException(status_code=400, detail="Round is already completed")
 
@@ -53,6 +49,10 @@ def submit_pick(
     if not match:
         raise HTTPException(status_code=400, detail="Player is not in this round")
 
+    # Check per-match deadline: must be > 1 hour before that specific match starts
+    if match.match_time and datetime.now(timezone.utc) >= match.match_time - timedelta(hours=1):
+        raise HTTPException(status_code=400, detail="Pick deadline has passed for this match")
+
     # Check player not already picked in this game
     previous_pick = db.query(Pick).filter(
         Pick.game_id == payload.game_id,
@@ -71,7 +71,7 @@ def submit_pick(
     if existing:
         # Update existing pick
         existing.player_id = payload.player_id
-        existing.submitted_at = datetime.utcnow()
+        existing.submitted_at = datetime.now(timezone.utc)
         db.commit()
         return {"message": "Pick updated", "pick_id": existing.id}
 
@@ -98,10 +98,6 @@ def delete_pick(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    round_obj = db.get(Round, round_id)
-    if round_obj and round_obj.pick_deadline and datetime.utcnow() > round_obj.pick_deadline:
-        raise HTTPException(status_code=400, detail="Pick deadline has passed")
-
     pick = db.query(Pick).filter(
         Pick.game_id == game_id,
         Pick.user_id == current_user.id,
@@ -109,6 +105,14 @@ def delete_pick(
     ).first()
     if not pick:
         raise HTTPException(status_code=404, detail="Pick not found")
+
+    # Check per-match deadline for the picked player's match
+    match = db.query(Match).filter(
+        Match.round_id == round_id,
+        (Match.player1_id == pick.player_id) | (Match.player2_id == pick.player_id),
+    ).first()
+    if match and match.match_time and datetime.now(timezone.utc) >= match.match_time - timedelta(hours=1):
+        raise HTTPException(status_code=400, detail="Pick deadline has passed for this match")
 
     db.delete(pick)
     db.commit()

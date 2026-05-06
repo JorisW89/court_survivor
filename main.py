@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -119,6 +120,7 @@ class Tournament:
     category: Optional[str]
     start_date: Optional[str]
     end_date: Optional[str]
+    psa_location: Optional[str] = None  # "City, CountryCode" from PSA listing
     matches: List[Match] = field(default_factory=list)
 
 
@@ -191,6 +193,14 @@ def strip_gender(title: str) -> str:
 
 # ── Surname-pair matching (bridges squashinfo ↔ PSA) ─────────────────────────
 
+def _normalize_surname_str(s: str) -> str:
+    """Lowercase, fold unicode accents, and collapse spaces around hyphens."""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"\s*-\s*", "-", s)  # "Osborne - Wylde" → "Osborne-Wylde"
+    return s.lower()
+
+
 def extract_surname(name: str) -> str:
     """
     Extract the surname from either an abbreviated PSA name ("M. ElShorbagy (1)")
@@ -201,12 +211,12 @@ def extract_surname(name: str) -> str:
     # Abbreviated: "M. Surname …"
     m = re.match(r"^[A-Z]\.\s+(.+)$", name)
     if m:
-        return m.group(1).strip().lower()
+        return _normalize_surname_str(m.group(1).strip())
     # Full name: drop first word (first name)
     parts = name.split()
     if len(parts) >= 2:
-        return " ".join(parts[1:]).strip().lower()
-    return name.strip().lower()
+        return _normalize_surname_str(" ".join(parts[1:]).strip())
+    return _normalize_surname_str(name.strip())
 
 
 def match_surname_key(name1: str, name2: str) -> Tuple[str, str]:
@@ -529,17 +539,23 @@ async def _scrape_psa_listing(
             if not is_within_window(start_date, end_date, reference_date, lookahead_days):
                 continue
 
+            location = cells[2].get_text(" ", strip=True) if len(cells) > 2 else None
+            if location in ("-", ""):
+                location = None
+
             for a in row.find_all("a", href=re.compile(r"/tournament/")):
                 href = a.get("href", "")
                 url  = (PSA_BASE + href if href.startswith("/") else href)
                 url  = url.split("#")[0].rstrip("/") + "/"
                 if url not in seen:
                     seen.add(url)
-                    results.append({"url": url, "start_date": start_date, "end_date": end_date})
+                    results.append({"url": url, "start_date": start_date, "end_date": end_date, "location": location})
 
+        print(f"[enrich] PSA listing: {len(results)} tournament(s) in window")
         if debug:
             print(f"[debug] PSA listing: {len(results)} tournaments in window")
     except Exception as exc:
+        print(f"[enrich] PSA listing scrape failed: {exc}")
         if debug:
             print(f"[debug] PSA listing scrape failed: {exc}")
     finally:
@@ -586,6 +602,7 @@ async def _scrape_psa_draw_times(
                     print(f"[debug] PSA times for {division}: {len(time_map)} entries")
 
     except Exception as exc:
+        print(f"[enrich] PSA draw scrape failed for {psa_url}: {exc}")
         if debug:
             print(f"[debug] PSA draw scrape failed for {psa_url}: {exc}")
     finally:
@@ -618,36 +635,84 @@ async def enrich_with_psa_times(
             ),
             viewport={"width": 1440, "height": 900},
             locale="en-GB",
+            timezone_id="UTC",
         )
         await _block_heavy_assets(context)
 
         psa_listings = await _scrape_psa_listing(context, reference_date, lookahead_days, debug)
 
         for tournament in tournaments:
-            # Find PSA tournament whose dates overlap this squashinfo tournament
-            psa_url = next(
-                (p["url"] for p in psa_listings
-                 if dates_overlap(p["start_date"], p["end_date"],
-                                  tournament.start_date, tournament.end_date)),
-                None,
-            )
+            # Find the PSA tournament whose dates best match this squashinfo
+            # tournament.  Score = sum of absolute day-differences in start and
+            # end dates; the closest-dated PSA entry wins.  This prevents a
+            # season-long series entry (e.g. a 60-day listing that overlaps
+            # everything) from beating a precisely-dated match.
+            sq_start = parse_iso_date(tournament.start_date)
+            sq_end   = parse_iso_date(tournament.end_date)
+
+            def _date_distance(p: Dict[str, Any]) -> int:
+                ps = parse_iso_date(p["start_date"])
+                pe = parse_iso_date(p["end_date"])
+                if not (ps and pe and sq_start and sq_end):
+                    return 9999
+                return abs((ps - sq_start).days) + abs((pe - sq_end).days)
+
+            candidates = [
+                p for p in psa_listings
+                if dates_overlap(p["start_date"], p["end_date"],
+                                 tournament.start_date, tournament.end_date)
+            ]
+            best = min(candidates, key=_date_distance) if candidates else None
+            psa_url = best["url"] if best else None
 
             if not psa_url:
+                print(f"[enrich] No PSA URL matched for: {tournament.title} [{tournament.start_date} – {tournament.end_date}]")
                 if debug:
                     print(f"[debug] No PSA URL matched for: {tournament.title}")
                 continue
 
+            tournament.psa_location = best.get("location")
+            print(f"[enrich] Enriching '{tournament.title}' from {psa_url} (location: {tournament.psa_location})")
             if debug:
                 print(f"[debug] Enriching '{tournament.title}' times from {psa_url}")
 
             division_times = await _scrape_psa_draw_times(context, psa_url, debug)
 
+            # Build a last-word fallback index: ("marcuzzo", "whyte") instead of
+            # ("lucas lucas marcuzzo", "whyte") to handle PSA name display quirks.
+            last_word_times: Dict[str, Dict[Tuple[str, str], str]] = {}
+            for div, times in division_times.items():
+                lw: Dict[Tuple[str, str], str] = {}
+                for (s1, s2), t in times.items():
+                    lw_key = tuple(sorted([s1.split()[-1], s2.split()[-1]]))
+                    lw[lw_key] = t
+                last_word_times[div] = lw
+
+            total_enriched = 0
+            matched_keys: set = set()
             for match in tournament.matches:
                 if match.match_time or not match.player1 or not match.player2:
                     continue
                 div_times = division_times.get(match.division, {})
                 key = match_surname_key(match.player1, match.player2)
-                match.match_time = div_times.get(key)
+                t = div_times.get(key)
+                if not t:
+                    # Fallback: match on just the last word of each extracted surname
+                    sq1 = extract_surname(match.player1).split()[-1]
+                    sq2 = extract_surname(match.player2).split()[-1]
+                    lw_key = tuple(sorted([sq1, sq2]))
+                    t = last_word_times.get(match.division, {}).get(lw_key)
+                if t:
+                    match.match_time = t
+                    total_enriched += 1
+                    matched_keys.add(key)
+            total_found = sum(len(v) for v in division_times.values())
+            print(f"[enrich]   → {total_enriched} match time(s) assigned ({total_found} found on PSA draw page)")
+            if total_found > total_enriched:
+                for div, times in division_times.items():
+                    for key, t in times.items():
+                        if key not in matched_keys:
+                            print(f"[enrich]   unmatched [{div}] {key[0]} vs {key[1]}  —  {t}")
 
         await browser.close()
 

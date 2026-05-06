@@ -123,6 +123,7 @@ class MatchForPick(BaseModel):
     player1: PlayerForPick
     player2: PlayerForPick
     match_time: Optional[str] = None  # raw display string
+    is_locked: bool = False  # true when < 1 hour before match start
 
 
 class RoundWithMatches(BaseModel):
@@ -189,3 +190,26 @@ class GroupLeaderboardEntry(BaseModel):
     tournament_title: str
     division: str
     entries: list[LeaderboardEntry]
+
+
+# --- Draw / Round results ---
+
+class MatchResult(BaseModel):
+    match_id: int
+    player1_name: str
+    player2_name: str
+    winner_name: Optional[str]
+    score: Optional[str]
+    match_time: Optional[str]
+
+
+class RoundResult(BaseModel):
+    round_id: int
+    round_name: str
+    round_order: int
+    status: str
+    matches: list[MatchResult]
+
+
+class DrawResponse(BaseModel):
+    rounds: list[RoundResult]

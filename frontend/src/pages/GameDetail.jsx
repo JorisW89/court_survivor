@@ -64,8 +64,9 @@ function PlayerButton({ player, state, onClick }) {
   )
 }
 
-function MatchCard({ match, selectedPlayerId, onSelect, locked }) {
+function MatchCard({ match, selectedPlayerId, onSelect, roundLocked }) {
   const { player1, player2 } = match
+  const locked = roundLocked || match.is_locked
 
   function stateFor(player) {
     if (player.already_picked) return 'used'
@@ -81,12 +82,57 @@ function MatchCard({ match, selectedPlayerId, onSelect, locked }) {
   }
 
   return (
-    <div className="flex items-stretch gap-2">
-      <PlayerButton player={player1} state={stateFor(player1)} onClick={() => handleClick(player1)} />
-      <div className="flex items-center justify-center w-7 shrink-0">
-        <span className="text-xs font-semibold text-gray-300">vs</span>
+    <div className="space-y-1">
+      <div className="flex items-stretch gap-2">
+        <PlayerButton player={player1} state={stateFor(player1)} onClick={() => handleClick(player1)} />
+        <div className="flex items-center justify-center w-7 shrink-0">
+          <span className="text-xs font-semibold text-gray-300">vs</span>
+        </div>
+        <PlayerButton player={player2} state={stateFor(player2)} onClick={() => handleClick(player2)} />
       </div>
-      <PlayerButton player={player2} state={stateFor(player2)} onClick={() => handleClick(player2)} />
+      {match.is_locked && !roundLocked && (
+        <p className="text-xs text-amber-600 pl-1">Locked — match starts within 1 hour</p>
+      )}
+    </div>
+  )
+}
+
+// ── Completed round results ────────────────────────────────────────────────
+
+function CompletedRoundResults({ round }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="border border-gray-100 rounded-2xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+      >
+        <span className="font-medium text-gray-700 text-sm">{round.round_name}</span>
+        <span className="text-xs text-gray-400">{open ? '▲' : '▼'} Results</span>
+      </button>
+      {open && (
+        <div className="divide-y divide-gray-50">
+          {round.matches.map(m => (
+            <div key={m.match_id} className="px-4 py-3 flex items-center gap-3 text-sm">
+              <div className="flex-1 text-right">
+                <span className={m.winner_name === m.player1_name ? 'font-semibold text-gray-900' : 'text-gray-400'}>
+                  {m.player1_name}
+                </span>
+              </div>
+              <span className="text-xs text-gray-300 shrink-0">vs</span>
+              <div className="flex-1">
+                <span className={m.winner_name === m.player2_name ? 'font-semibold text-gray-900' : 'text-gray-400'}>
+                  {m.player2_name}
+                </span>
+              </div>
+              {m.score && (
+                <span className="text-xs text-gray-400 shrink-0 hidden sm:block">{m.score}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -98,6 +144,7 @@ export default function GameDetail() {
   const { user } = useAuth()
   const [game, setGame] = useState(null)
   const [roundData, setRoundData] = useState(null)
+  const [drawData, setDrawData] = useState(null)
   const [selectedPlayer, setSelectedPlayer] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -122,9 +169,20 @@ export default function GameDetail() {
     }
   }, [id, user])
 
+  const loadDraw = useCallback(async () => {
+    try {
+      const r = await api.get(`/games/${id}/draw`)
+      setDrawData(r.data)
+    } catch {
+      // draw not critical
+    }
+  }, [id])
+
   useEffect(() => {
-    loadGame()
-      .then(gameData => loadRoundPlayers(gameData))
+    Promise.all([
+      loadGame().then(gameData => loadRoundPlayers(gameData)),
+      loadDraw(),
+    ])
       .catch(() => setError('Failed to load game'))
       .finally(() => setLoading(false))
   }, []) // eslint-disable-line
@@ -169,6 +227,9 @@ export default function GameDetail() {
   const canPick = user && currentRound && ['open', 'upcoming'].includes(currentRound.status) && !myP?.is_eliminated
   const roundIsLocked = currentRound?.status === 'locked'
   const alreadyPickedThisRound = myP?.my_picks?.find(p => p.round_id === currentRound?.id)
+  const selectedMatchLocked = selectedPlayer != null && roundData?.matches?.find(
+    m => m.player1.id === selectedPlayer || m.player2.id === selectedPlayer
+  )?.is_locked === true
 
   return (
     <div className="space-y-6">
@@ -231,11 +292,9 @@ export default function GameDetail() {
             </span>
           </div>
 
-          {currentRound.pick_deadline && (
-            <p className="text-xs text-gray-400 mb-5">
-              Pick deadline: {formatDeadline(currentRound.pick_deadline)}
-            </p>
-          )}
+          <p className="text-xs text-gray-400 mb-5">
+            Each match locks 1 hour before it starts
+          </p>
 
           {/* Match draw */}
           {(canPick || roundIsLocked) && roundData?.matches?.length > 0 ? (
@@ -254,7 +313,7 @@ export default function GameDetail() {
                   match={match}
                   selectedPlayerId={selectedPlayer}
                   onSelect={canPick ? setSelectedPlayer : () => {}}
-                  locked={roundIsLocked}
+                  roundLocked={roundIsLocked}
                 />
               ))}
 
@@ -262,9 +321,12 @@ export default function GameDetail() {
                 <div className="pt-2 space-y-2">
                   {error    && <p className="text-sm text-red-600">{error}</p>}
                   {successMsg && <p className="text-sm text-emerald-600">{successMsg}</p>}
+                  {selectedMatchLocked && (
+                    <p className="text-sm text-amber-600">This match has already locked. Pick a different match.</p>
+                  )}
                   <button
                     onClick={handleSubmitPick}
-                    disabled={!selectedPlayer || submitting}
+                    disabled={!selectedPlayer || submitting || selectedMatchLocked}
                     className="btn-primary w-full"
                   >
                     {submitting
@@ -294,6 +356,20 @@ export default function GameDetail() {
             {myP.my_picks.map(pick => (
               <PickHistoryRow key={pick.round_id} pick={pick} />
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Completed round results */}
+      {drawData?.rounds?.some(r => r.status === 'completed' && r.matches.length > 0) && (
+        <div className="card">
+          <h2 className="font-semibold text-gray-900 mb-3">Results</h2>
+          <div className="space-y-2">
+            {drawData.rounds
+              .filter(r => r.status === 'completed' && r.matches.length > 0)
+              .map(r => (
+                <CompletedRoundResults key={r.round_id} round={r} />
+              ))}
           </div>
         </div>
       )}

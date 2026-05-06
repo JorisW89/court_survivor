@@ -9,7 +9,7 @@ Test accounts (all passwords: testpass123):
 """
 
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .auth import hash_password
 from .database import SessionLocal
@@ -68,7 +68,7 @@ def seed():
             start_date="2026-03-25",
             end_date="2026-04-01",
             status="completed",
-            last_synced=datetime.utcnow(),
+            last_synced=datetime.now(timezone.utc),
         )
         db.add(past)
         db.flush()
@@ -148,7 +148,7 @@ def seed():
         # ACTIVE TOURNAMENT — PSA World Tour Silver (in progress)
         # Round of 32 completed, Last 16 OPEN — test_user can pick
         # ══════════════════════════════════════════════════════════════════
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         active = Tournament(
             psa_url="https://example.com/active-silver-2026/",
             title="Black Ball Open 2026",

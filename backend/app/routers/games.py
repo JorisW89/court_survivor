@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,14 +9,17 @@ from ..database import get_db
 from ..models import Game, GameParticipant, Pick, Player, Round, Tournament, User
 from ..models import Match as MatchModel
 from ..schemas import (
+    DrawResponse,
     GameResponse,
     LeaderboardEntry,
     LeaderboardResponse,
     MatchForPick,
+    MatchResult,
     MyParticipant,
     PickSummary,
     PlayerForPick,
     RoundResponse,
+    RoundResult,
     RoundWithMatches,
     TournamentResponse,
 )
@@ -146,11 +150,15 @@ def get_round_players(
         p2 = db.get(Player, m.player2_id) if m.player2_id else None
         if not p1 or not p2:
             continue
+        match_locked = bool(
+            m.match_time and datetime.now(timezone.utc) >= m.match_time - timedelta(hours=1)
+        )
         match_data.append(MatchForPick(
             match_id=m.id,
             player1=PlayerForPick(id=p1.id, name=p1.name, already_picked=p1.id in already_picked_ids),
             player2=PlayerForPick(id=p2.id, name=p2.name, already_picked=p2.id in already_picked_ids),
             match_time=str(m.match_time) if m.match_time else None,
+            is_locked=match_locked,
         ))
 
     existing_pick = db.query(Pick).filter(
@@ -164,6 +172,56 @@ def get_round_players(
         matches=match_data,
         my_pick=existing_pick.player_id if existing_pick else None,
     )
+
+
+@router.get("/{game_id}/draw", response_model=DrawResponse)
+def get_draw(
+    game_id: int,
+    db: Session = Depends(get_db),
+):
+    game = db.get(Game, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    rounds = (
+        db.query(Round)
+        .filter(Round.tournament_id == game.tournament_id, Round.division == game.division)
+        .order_by(Round.round_order)
+        .all()
+    )
+
+    round_results = []
+    for r in rounds:
+        matches = (
+            db.query(MatchModel)
+            .filter(MatchModel.round_id == r.id)
+            .order_by(MatchModel.match_time, MatchModel.id)
+            .all()
+        )
+        match_results = []
+        for m in matches:
+            p1 = db.get(Player, m.player1_id) if m.player1_id else None
+            p2 = db.get(Player, m.player2_id) if m.player2_id else None
+            if not p1 or not p2:
+                continue
+            winner = db.get(Player, m.winner_id) if m.winner_id else None
+            match_results.append(MatchResult(
+                match_id=m.id,
+                player1_name=p1.name,
+                player2_name=p2.name,
+                winner_name=winner.name if winner else None,
+                score=m.score,
+                match_time=str(m.match_time) if m.match_time else None,
+            ))
+        round_results.append(RoundResult(
+            round_id=r.id,
+            round_name=r.name,
+            round_order=r.round_order,
+            status=r.status,
+            matches=match_results,
+        ))
+
+    return DrawResponse(rounds=round_results)
 
 
 @router.get("/{game_id}/leaderboard", response_model=LeaderboardResponse)

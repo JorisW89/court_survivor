@@ -1,7 +1,11 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from .database import Base
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 class User(Base):
@@ -11,7 +15,7 @@ class User(Base):
     email = Column(String, unique=True, nullable=False, index=True)
     username = Column(String, unique=True, nullable=False, index=True)
     password_hash = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     picks = relationship("Pick", back_populates="user")
     game_participants = relationship("GameParticipant", back_populates="user")
@@ -29,7 +33,8 @@ class Tournament(Base):
     start_date = Column(String)
     end_date = Column(String)
     status = Column(String, default="upcoming")  # upcoming, active, completed
-    last_synced = Column(DateTime)
+    timezone = Column(String)  # IANA timezone of the tournament venue, e.g. "Europe/London"
+    last_synced = Column(DateTime(timezone=True))
 
     rounds = relationship("Round", back_populates="tournament", cascade="all, delete-orphan")
     matches = relationship("Match", back_populates="tournament", cascade="all, delete-orphan")
@@ -53,8 +58,8 @@ class Round(Base):
     name = Column(String, nullable=False)
     round_order = Column(Integer, nullable=False)
     status = Column(String, default="upcoming")  # upcoming, open, locked, completed
-    first_match_time = Column(DateTime)
-    pick_deadline = Column(DateTime)
+    first_match_time = Column(DateTime(timezone=True))
+    pick_deadline = Column(DateTime(timezone=True))
 
     tournament = relationship("Tournament", back_populates="rounds")
     matches = relationship("Match", back_populates="round")
@@ -74,7 +79,7 @@ class Match(Base):
     player2_id = Column(Integer, ForeignKey("players.id"))
     winner_id = Column(Integer, ForeignKey("players.id"))
     score = Column(String)
-    match_time = Column(DateTime)
+    match_time = Column(DateTime(timezone=True))
     psa_raw_id = Column(String, unique=True, index=True)
 
     tournament = relationship("Tournament", back_populates="matches")
@@ -112,7 +117,7 @@ class GameParticipant(Base):
     is_eliminated = Column(Boolean, default=False)
     eliminated_at_round_id = Column(Integer, ForeignKey("rounds.id"), nullable=True)
     total_points = Column(Integer, default=0)
-    joined_at = Column(DateTime, default=datetime.utcnow)
+    joined_at = Column(DateTime(timezone=True), default=_utcnow)
 
     game = relationship("Game", back_populates="participants")
     user = relationship("User", back_populates="game_participants")
@@ -129,7 +134,7 @@ class Pick(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     round_id = Column(Integer, ForeignKey("rounds.id"), nullable=False)
     player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
-    submitted_at = Column(DateTime, default=datetime.utcnow)
+    submitted_at = Column(DateTime(timezone=True), default=_utcnow)
     is_correct = Column(Boolean, nullable=True)  # None = pending
     points_awarded = Column(Integer, default=0)
 
@@ -148,7 +153,7 @@ class Group(Base):
     name = Column(String, nullable=False)
     invite_code = Column(String, unique=True, nullable=False, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     creator = relationship("User", back_populates="groups_created")
     members = relationship("GroupMember", back_populates="group", cascade="all, delete-orphan")
@@ -160,7 +165,7 @@ class GroupMember(Base):
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    joined_at = Column(DateTime, default=datetime.utcnow)
+    joined_at = Column(DateTime(timezone=True), default=_utcnow)
 
     group = relationship("Group", back_populates="members")
     user = relationship("User", back_populates="group_memberships")
@@ -176,4 +181,4 @@ class Ranking(Base):
     rank = Column(Integer, nullable=False)
     player_name = Column(String, nullable=False)
     country = Column(String)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow)

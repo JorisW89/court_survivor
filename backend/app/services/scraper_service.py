@@ -4,7 +4,7 @@ Runs the PSA scraper and syncs results into the database.
 
 import asyncio
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +15,115 @@ from sqlalchemy.orm import Session
 from ..models import Game, Match, Player, Ranking, Round, Tournament
 
 ROOT_DIR = Path(__file__).parent.parent.parent.parent
+
+# ── Location → IANA timezone mapping ─────────────────────────────────────────
+# PSA listing provides "City, CountryCode" (ISO 3166-1 alpha-2, except "EN" for England).
+# Country-level defaults cover most cases; city-level overrides handle large countries
+# with multiple timezones (US, AU, BR, CA).
+
+_COUNTRY_TZ: Dict[str, str] = {
+    "AE": "Asia/Dubai",
+    "AT": "Europe/Vienna",
+    "AU": "Australia/Sydney",
+    "BE": "Europe/Brussels",
+    "BG": "Europe/Sofia",
+    "BR": "America/Sao_Paulo",
+    "CA": "America/Toronto",
+    "CH": "Europe/Zurich",
+    "CZ": "Europe/Prague",
+    "DE": "Europe/Berlin",
+    "DK": "Europe/Copenhagen",
+    "EG": "Africa/Cairo",
+    "EN": "Europe/London",
+    "ES": "Europe/Madrid",
+    "FI": "Europe/Helsinki",
+    "FR": "Europe/Paris",
+    "GB": "Europe/London",
+    "HK": "Asia/Hong_Kong",
+    "HU": "Europe/Budapest",
+    "IE": "Europe/Dublin",
+    "IL": "Asia/Jerusalem",
+    "IN": "Asia/Kolkata",
+    "JO": "Asia/Amman",
+    "JP": "Asia/Tokyo",
+    "KR": "Asia/Seoul",
+    "KW": "Asia/Kuwait",
+    "LB": "Asia/Beirut",
+    "MY": "Asia/Kuala_Lumpur",
+    "NL": "Europe/Amsterdam",
+    "NO": "Europe/Oslo",
+    "NZ": "Pacific/Auckland",
+    "OM": "Asia/Muscat",
+    "PH": "Asia/Manila",
+    "PK": "Asia/Karachi",
+    "PL": "Europe/Warsaw",
+    "PT": "Europe/Lisbon",
+    "QA": "Asia/Qatar",
+    "RO": "Europe/Bucharest",
+    "RS": "Europe/Belgrade",
+    "SA": "Asia/Riyadh",
+    "SE": "Europe/Stockholm",
+    "SG": "Asia/Singapore",
+    "SI": "Europe/Ljubljana",
+    "SK": "Europe/Bratislava",
+    "TH": "Asia/Bangkok",
+    "TR": "Europe/Istanbul",
+    "TW": "Asia/Taipei",
+    "TZ": "Africa/Dar_es_Salaam",
+    "US": "America/New_York",   # default; most PSA US events are East Coast
+    "VG": "America/Tortola",
+    "ZA": "Africa/Johannesburg",
+    "ZW": "Africa/Harare",
+}
+
+_CITY_TZ_OVERRIDES: Dict[str, str] = {
+    # US multi-timezone overrides (lowercase city name)
+    "chicago":       "America/Chicago",
+    "houston":       "America/Chicago",
+    "dallas":        "America/Chicago",
+    "austin":        "America/Chicago",
+    "minneapolis":   "America/Chicago",
+    "denver":        "America/Denver",
+    "phoenix":       "America/Phoenix",
+    "los angeles":   "America/Los_Angeles",
+    "san francisco": "America/Los_Angeles",
+    "seattle":       "America/Los_Angeles",
+    "las vegas":     "America/Los_Angeles",
+    # Australia
+    "melbourne":     "Australia/Melbourne",
+    "sydney":        "Australia/Sydney",
+    "brisbane":      "Australia/Brisbane",
+    "perth":         "Australia/Perth",
+    "adelaide":      "Australia/Adelaide",
+    # Canada
+    "vancouver":     "America/Vancouver",
+    "calgary":       "America/Edmonton",
+    "winnipeg":      "America/Winnipeg",
+    "montreal":      "America/Toronto",
+    # Brazil
+    "rio de janeiro": "America/Sao_Paulo",
+    "brasilia":      "America/Sao_Paulo",
+    "fortaleza":     "America/Fortaleza",
+    "manaus":        "America/Manaus",
+}
+
+
+def location_to_timezone(location: Optional[str]) -> Optional[str]:
+    """
+    Convert a PSA location string like "Bristol, EN" or "Atlanta, US" to an
+    IANA timezone name.  Returns None if the location cannot be resolved.
+    """
+    if not location or location.strip() in ("-", ""):
+        return None
+    parts = [p.strip() for p in location.split(",")]
+    if len(parts) < 2:
+        return None
+    city    = parts[0].lower()
+    country = parts[-1].upper()
+    # City overrides take precedence (needed for large multi-tz countries)
+    if city in _CITY_TZ_OVERRIDES:
+        return _CITY_TZ_OVERRIDES[city]
+    return _COUNTRY_TZ.get(country)
 
 ROUND_ORDER_MAP = {
     "round 1": 1,
@@ -50,22 +159,28 @@ def get_round_order(round_name: str) -> int:
     return ROUND_ORDER_MAP.get(key, 99)
 
 
-def parse_match_time(time_str: Optional[str]) -> Optional[datetime]:
+def parse_match_time(time_str: Optional[str], tz_name: Optional[str] = None) -> Optional[datetime]:
     if not time_str:
         return None
     cleaned = time_str.replace("•", " ").replace("–", "-")
     try:
         from dateutil import parser as date_parser
-        return date_parser.parse(cleaned, fuzzy=True)
+        dt = date_parser.parse(cleaned, fuzzy=True)
+        if dt.tzinfo is None:
+            if tz_name:
+                # Interpret the scraped time as venue local time, then convert to UTC.
+                from zoneinfo import ZoneInfo
+                dt = dt.replace(tzinfo=ZoneInfo(tz_name)).astimezone(timezone.utc)
+            else:
+                # Unknown venue timezone — store as-is with UTC marker (best effort).
+                dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
 
 
 def compute_pick_deadline(match_time: datetime) -> datetime:
-    # Midnight UTC of the day before the match
-    match_date = match_time.date()
-    day_before = match_date - timedelta(days=1)
-    return datetime(day_before.year, day_before.month, day_before.day, 23, 59, 59)
+    return match_time - timedelta(hours=1)
 
 
 def upsert_player(db: Session, raw_name: str) -> Optional[Player]:
@@ -113,10 +228,13 @@ def sync_tournaments(db: Session, data: list[dict]) -> None:
         tournament.category = t_data.get("category")
         tournament.start_date = t_data.get("start_date")
         tournament.end_date = t_data.get("end_date")
-        tournament.last_synced = datetime.utcnow()
+        tournament.last_synced = datetime.now(timezone.utc)
+        tz_name = location_to_timezone(t_data.get("psa_location"))
+        if tz_name:
+            tournament.timezone = tz_name
 
         # Determine tournament status
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         start = _parse_date(tournament.start_date)
         end = _parse_date(tournament.end_date)
         if start and end:
@@ -136,7 +254,7 @@ def sync_tournaments(db: Session, data: list[dict]) -> None:
 
         # Sync matches
         for m_data in t_data.get("matches", []):
-            _sync_match(db, tournament, m_data)
+            _sync_match(db, tournament, m_data, tz_name=tournament.timezone)
 
         # Update rounds: set first_match_time and pick_deadline
         _update_round_deadlines(db, tournament.id)
@@ -173,7 +291,7 @@ def _ensure_game(db: Session, tournament_id: int, division: str) -> Game:
     return game
 
 
-def _sync_match(db: Session, tournament: Tournament, m_data: dict) -> None:
+def _sync_match(db: Session, tournament: Tournament, m_data: dict, tz_name: Optional[str] = None) -> None:
     raw_id = m_data.get("raw_id")
     if not raw_id:
         return
@@ -188,7 +306,7 @@ def _sync_match(db: Session, tournament: Tournament, m_data: dict) -> None:
     if not p1 or not p2:
         return
 
-    match_time = parse_match_time(m_data.get("match_time"))
+    match_time = parse_match_time(m_data.get("match_time"), tz_name=tz_name)
 
     existing = db.query(Match).filter(Match.psa_raw_id == raw_id).first()
     if not existing:
@@ -234,23 +352,35 @@ def _update_round_deadlines(db: Session, tournament_id: int) -> None:
     rounds = db.query(Round).filter(Round.tournament_id == tournament_id).all()
     tournament = db.get(Tournament, tournament_id)
     for r in rounds:
-        matches = db.query(Match).filter(Match.round_id == r.id, Match.match_time.isnot(None)).all()
-        if not matches:
+        all_matches = db.query(Match).filter(Match.round_id == r.id).all()
+
+        # If every match in the round has a winner, the round is done — no match
+        # times required (completed rounds often lack PSA time data).
+        if all_matches and all(m.winner_id is not None for m in all_matches):
+            r.status = "completed"
+            timed = [m for m in all_matches if m.match_time]
+            if timed:
+                r.first_match_time = min(m.match_time for m in timed)
+                r.pick_deadline = compute_pick_deadline(r.first_match_time)
+            continue
+
+        timed_matches = [m for m in all_matches if m.match_time]
+        if not timed_matches:
             # No match times yet — mark as open if the tournament hasn't started so
             # the draw is visible and picks can be submitted.
             if tournament and tournament.status == "upcoming" and r.status not in ("completed", "locked"):
                 r.status = "open"
             continue
-        earliest = min(m.match_time for m in matches)
-        r.first_match_time = earliest
-        r.pick_deadline = compute_pick_deadline(earliest)
 
-        # Determine round status
-        all_have_winner = all(m.winner_id is not None for m in db.query(Match).filter(Match.round_id == r.id).all())
-        now = datetime.utcnow()
-        if all_have_winner and len(matches) > 0:
-            r.status = "completed"
-        elif r.pick_deadline and now > r.pick_deadline:
+        earliest = min(m.match_time for m in timed_matches)
+        latest = max(m.match_time for m in timed_matches)
+        r.first_match_time = earliest
+        # Round deadline = 1 hour before the last match; round is locked only
+        # when every match in the round is within 1 hour (no pick is possible).
+        r.pick_deadline = compute_pick_deadline(latest)
+
+        now = datetime.now(timezone.utc)
+        if r.pick_deadline and now > r.pick_deadline:
             r.status = "locked"
         elif r.pick_deadline and now <= r.pick_deadline:
             r.status = "open"
@@ -312,7 +442,7 @@ def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]]) -> Non
         db.rollback()
 
     db.execute(text("DELETE FROM rankings"))
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     for division, entries in rankings.items():
         for entry in entries:

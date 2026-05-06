@@ -62,7 +62,7 @@ export default function GameCard({ game }) {
 
       {current_round?.pick_deadline && !my_participant?.is_eliminated && (
         <p className="text-xs text-gray-400 mt-2">
-          Deadline: {formatDeadline(current_round.pick_deadline)}
+          Last pick closes: {formatDeadline(current_round.pick_deadline)}
         </p>
       )}
     </Link>

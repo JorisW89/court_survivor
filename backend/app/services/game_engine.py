@@ -2,7 +2,7 @@
 Evaluates picks after rounds complete and updates player scores/elimination status.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -57,7 +57,7 @@ def evaluate_round(db: Session, round_obj: Round) -> None:
             participant.eliminated_at_round_id = round_obj.id
 
     # Eliminate users who didn't pick for this round (if deadline has passed)
-    if round_obj.pick_deadline and datetime.utcnow() > round_obj.pick_deadline:
+    if round_obj.pick_deadline and datetime.now(timezone.utc) > round_obj.pick_deadline:
         _eliminate_non_pickers(db, round_obj)
 
     db.commit()
