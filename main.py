@@ -546,6 +546,11 @@ async def _scrape_psa_listing(
             if location in ("-", ""):
                 location = None
 
+            # Detect tier from the LEVEL column image alt texts
+            # e.g. alt="PSA World Tour Gold" vs alt="PSA Challenger Tour 3"
+            img_alts = " ".join(img.get("alt", "") for img in row.find_all("img")).lower()
+            is_challenger = "challenger" in img_alts
+
             for a in row.find_all("a", href=re.compile(r"/tournament/")):
                 href  = a.get("href", "")
                 url   = (PSA_BASE + href if href.startswith("/") else href)
@@ -554,11 +559,12 @@ async def _scrape_psa_listing(
                 if url not in seen:
                     seen.add(url)
                     results.append({
-                        "url":        url,
-                        "title":      title,
-                        "start_date": start_date,
-                        "end_date":   end_date,
-                        "location":   location,
+                        "url":          url,
+                        "title":        title,
+                        "start_date":   start_date,
+                        "end_date":     end_date,
+                        "location":     location,
+                        "is_challenger": is_challenger,
                     })
 
         print(f"[enrich] PSA listing: {len(results)} tournament(s) in window")
@@ -623,6 +629,7 @@ async def fetch_tournaments(
     reference_date: date,
     include_tbd: bool,
     debug: bool,
+    world_events_only: bool = True,
 ) -> List[Tournament]:
     """
     PSA-first pipeline:
@@ -653,6 +660,12 @@ async def fetch_tournaments(
         await _block_heavy_assets(context)
 
         psa_listings = await _scrape_psa_listing(context, reference_date, lookahead_days, debug)
+
+        if world_events_only:
+            before = len(psa_listings)
+            psa_listings = [l for l in psa_listings if not l.get("is_challenger")]
+            print(f"[enrich] World Events filter: {len(psa_listings)}/{before} tournament(s) kept")
+
         if limit:
             psa_listings = psa_listings[:limit]
 
@@ -694,7 +707,10 @@ async def fetch_tournaments(
                 continue
 
             start_date, end_date = parse_event_dates(html)
-            if not is_within_window(start_date, end_date, reference_date, lookahead_days):
+            # Use a generous window (60 days) so minor date mismatches on SquashInfo
+            # don't silently drop events — dates_overlap() is the real filter when
+            # we pair SquashInfo events against specific PSA tournaments.
+            if not is_within_window(start_date, end_date, reference_date, 60):
                 continue
 
             si_title  = strip_gender(event["title"])
@@ -904,22 +920,25 @@ def print_human_report(
 
 async def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--json",        action="store_true")
-    parser.add_argument("--limit",       type=int,  default=None)
-    parser.add_argument("--days",        type=int,  default=LOOKAHEAD_DAYS)
-    parser.add_argument("--today",       type=str,  default=None)
-    parser.add_argument("--include-tbd", action="store_true")
-    parser.add_argument("--debug",       action="store_true")
+    parser.add_argument("--json",              action="store_true")
+    parser.add_argument("--limit",             type=int,  default=None)
+    parser.add_argument("--days",              type=int,  default=LOOKAHEAD_DAYS)
+    parser.add_argument("--today",             type=str,  default=None)
+    parser.add_argument("--include-tbd",       action="store_true")
+    parser.add_argument("--all-events",        action="store_true",
+                        help="Include Challenger events (default: World Events only)")
+    parser.add_argument("--debug",             action="store_true")
     args = parser.parse_args()
 
     reference_date = get_reference_date(args.today)
 
     events = await fetch_tournaments(
-        limit          = args.limit,
-        lookahead_days = args.days,
-        reference_date = reference_date,
-        include_tbd    = args.include_tbd,
-        debug          = args.debug,
+        limit             = args.limit,
+        lookahead_days    = args.days,
+        reference_date    = reference_date,
+        include_tbd       = args.include_tbd,
+        debug             = args.debug,
+        world_events_only = not args.all_events,
     )
 
     if args.json:

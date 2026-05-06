@@ -380,9 +380,12 @@ def _update_round_deadlines(db: Session, tournament_id: int) -> None:
         r.pick_deadline = compute_pick_deadline(latest)
 
         now = datetime.now(timezone.utc)
-        if r.pick_deadline and now > r.pick_deadline:
+        deadline = r.pick_deadline
+        if deadline is not None and deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        if deadline and now > deadline:
             r.status = "locked"
-        elif r.pick_deadline and now <= r.pick_deadline:
+        elif deadline and now <= deadline:
             r.status = "open"
 
 
