@@ -34,6 +34,14 @@ function formatTimeLeft(ms) {
 }
 
 function MatchPickTimer({ match, now }) {
+  if (match.is_finished) {
+    return (
+      <span className="text-[11px] font-semibold rounded-full bg-gray-100 text-gray-600 px-2.5 py-1">
+        Match finished
+      </span>
+    )
+  }
+
   const deadline = getMatchPickDeadline(match.match_time)
 
   if (!deadline) {
@@ -153,7 +161,7 @@ function MatchCard({ match, selectedPlayerId, onSelect, roundLocked, now }) {
   const { player1, player2 } = match
   const matchPickDeadline = getMatchPickDeadline(match.match_time)
   const matchTimerLocked = matchPickDeadline ? now >= matchPickDeadline : false
-  const locked = roundLocked || match.is_locked || matchTimerLocked
+  const locked = roundLocked || match.is_locked || matchTimerLocked || match.is_finished
 
   function stateFor(player) {
     if (player.already_picked) return 'used'
@@ -191,7 +199,9 @@ function MatchCard({ match, selectedPlayerId, onSelect, roundLocked, now }) {
         <PlayerButton player={player2} state={stateFor(player2)} onClick={() => handleClick(player2)} />
       </div>
       {locked && !roundLocked && (
-        <p className="text-xs text-amber-600 pl-1">Locked — match starts within 1 hour</p>
+        <p className="text-xs text-amber-600 pl-1">
+          {match.is_finished ? 'Locked — match has finished' : 'Locked — match starts within 1 hour'}
+        </p>
       )}
     </div>
   )
@@ -397,6 +407,7 @@ export default function GameDetail() {
   const [drawData, setDrawData] = useState(null)
   const [selectedPlayer, setSelectedPlayer] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
@@ -445,7 +456,7 @@ export default function GameDetail() {
 
   function isMatchLocked(match) {
     const deadline = getMatchPickDeadline(match.match_time)
-    return Boolean(match.is_locked || (deadline && now >= deadline))
+    return Boolean(match.is_locked || match.is_finished || (deadline && now >= deadline))
   }
 
   async function handleSubmitPick() {
@@ -467,6 +478,25 @@ export default function GameDetail() {
       setError(err.response?.data?.detail || 'Failed to submit pick')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  async function handleResetPick() {
+    if (!game?.current_round || !alreadyPickedThisRound) return
+    setResetting(true)
+    setError('')
+    try {
+      await api.delete(`/picks/${game.id}/${game.current_round.id}`)
+      setSelectedPlayer(null)
+      setSuccessMsg('Pick reset.')
+      setTimeout(() => setSuccessMsg(''), 3000)
+      const r = await api.get(`/games/${id}`)
+      setGame(r.data)
+      await loadRoundPlayers(r.data)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to reset pick')
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -498,6 +528,18 @@ export default function GameDetail() {
     m => m.player1.id === selectedPlayer || m.player2.id === selectedPlayer
   )
   const selectedMatchIsLocked = selectedMatchLocked ? isMatchLocked(selectedMatchLocked) : false
+  const selectedPickChanged = Boolean(
+    selectedPlayer && (!alreadyPickedThisRound || selectedPlayer !== alreadyPickedThisRound.player_id)
+  )
+  const currentPickMatch = alreadyPickedThisRound && roundData?.matches?.find(
+    m => m.player1.id === alreadyPickedThisRound.player_id || m.player2.id === alreadyPickedThisRound.player_id
+  )
+  const currentPickCanReset = Boolean(
+    currentRound?.status === 'open' &&
+    alreadyPickedThisRound &&
+    currentPickMatch &&
+    !isMatchLocked(currentPickMatch)
+  )
   const selectedPlayerDetail = roundData?.matches
     ?.flatMap(m => [m.player1, m.player2])
     ?.find(p => p.id === selectedPlayer)
@@ -594,15 +636,32 @@ export default function GameDetail() {
                   )}
                   <button
                     onClick={handleSubmitPick}
-                    disabled={!selectedPlayer || submitting || selectedMatchIsLocked}
+                    disabled={!selectedPickChanged || submitting || resetting || selectedMatchIsLocked}
                     className="btn-primary w-full"
                   >
                     {submitting
                       ? 'Saving…'
+                      : alreadyPickedThisRound && !selectedPickChanged
+                      ? 'Pick saved'
                       : alreadyPickedThisRound
                       ? 'Update pick'
                       : 'Confirm pick'}
                   </button>
+                  {alreadyPickedThisRound && (
+                    <button
+                      type="button"
+                      onClick={handleResetPick}
+                      disabled={!currentPickCanReset || submitting || resetting}
+                      className="btn-secondary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {resetting ? 'Resetting…' : 'Reset pick'}
+                    </button>
+                  )}
+                  {alreadyPickedThisRound && !currentPickCanReset && (
+                    <p className="text-xs text-gray-400">
+                      Reset is available until 1 hour before your picked match starts.
+                    </p>
+                  )}
                 </div>
               )}
             </div>

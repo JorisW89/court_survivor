@@ -148,6 +148,7 @@ def get_round_players(
         p.player_id
         for p in db.query(Pick)
         .filter(Pick.game_id == game_id, Pick.user_id == current_user.id)
+        .filter(Pick.round_id != round_id)
         .all()
     }
 
@@ -194,6 +195,7 @@ def get_round_players(
             ),
             match_time=str(m.match_time) if m.match_time else None,
             is_locked=match_locked,
+            is_finished=m.winner_id is not None,
         ))
 
     existing_pick = db.query(Pick).filter(

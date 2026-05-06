@@ -63,6 +63,19 @@ def submit_pick(
         Pick.round_id == payload.round_id,
     ).first()
     if existing:
+        current_match = db.query(Match).filter(
+            Match.round_id == payload.round_id,
+            (Match.player1_id == existing.player_id) | (Match.player2_id == existing.player_id),
+        ).first()
+        if not current_match:
+            raise HTTPException(status_code=400, detail="Current pick match not found")
+
+        if current_match.winner_id or existing.is_correct is not None:
+            raise HTTPException(status_code=400, detail="Pick cannot be updated after the match has finished")
+
+        if current_match.match_time and is_locked_before(current_match.match_time, timedelta(hours=1)):
+            raise HTTPException(status_code=400, detail="Pick deadline has passed for your current match")
+
         # Update existing pick
         existing.player_id = payload.player_id
         existing.submitted_at = datetime.now(timezone.utc)
@@ -92,6 +105,20 @@ def delete_pick(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    game = db.get(Game, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    round_obj = db.get(Round, round_id)
+    if not round_obj:
+        raise HTTPException(status_code=404, detail="Round not found")
+
+    if round_obj.tournament_id != game.tournament_id or round_obj.division != game.division:
+        raise HTTPException(status_code=400, detail="Round does not belong to this game")
+
+    if round_obj.status != "open":
+        raise HTTPException(status_code=400, detail="Pick can only be reset while the round is open")
+
     pick = db.query(Pick).filter(
         Pick.game_id == game_id,
         Pick.user_id == current_user.id,
@@ -105,7 +132,13 @@ def delete_pick(
         Match.round_id == round_id,
         (Match.player1_id == pick.player_id) | (Match.player2_id == pick.player_id),
     ).first()
-    if match and match.match_time and is_locked_before(match.match_time, timedelta(hours=1)):
+    if not match:
+        raise HTTPException(status_code=400, detail="Pick match not found")
+
+    if match.winner_id or pick.is_correct is not None:
+        raise HTTPException(status_code=400, detail="Pick cannot be reset after the match has finished")
+
+    if match.match_time and is_locked_before(match.match_time, timedelta(hours=1)):
         raise HTTPException(status_code=400, detail="Pick deadline has passed for this match")
 
     db.delete(pick)

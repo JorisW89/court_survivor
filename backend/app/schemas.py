@@ -134,6 +134,7 @@ class MatchForPick(BaseModel):
     player2: PlayerForPick
     match_time: Optional[str] = None  # raw display string
     is_locked: bool = False  # true when < 1 hour before match start
+    is_finished: bool = False
 
 
 class RoundWithMatches(BaseModel):
