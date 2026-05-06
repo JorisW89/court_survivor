@@ -12,7 +12,7 @@ class UserCreate(BaseModel):
 
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    identifier: str  # email or username
     password: str
 
 

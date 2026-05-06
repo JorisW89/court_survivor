@@ -166,7 +166,7 @@ export default function GameDetail() {
   const myP = game.my_participant
   const currentRound = game.current_round
   // myP is null for users who haven't picked yet — they can still enter
-  const canPick = user && currentRound && currentRound.status === 'open' && !myP?.is_eliminated
+  const canPick = user && currentRound && ['open', 'upcoming'].includes(currentRound.status) && !myP?.is_eliminated
   const roundIsLocked = currentRound?.status === 'locked'
   const alreadyPickedThisRound = myP?.my_picks?.find(p => p.round_id === currentRound?.id)
 

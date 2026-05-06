@@ -1,4 +1,6 @@
+import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -16,17 +18,36 @@ def get_cors_origins() -> list[str]:
     return [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
 
 
+async def _scraper_loop() -> None:
+    from .database import SessionLocal
+    from .services.scraper_service import run_scraper_and_sync
+
+    while True:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        print(f"[scheduler] Next scrape at {next_run.isoformat()} (in {wait_seconds:.0f}s)")
+        await asyncio.sleep(wait_seconds)
+
+        db = SessionLocal()
+        try:
+            await run_scraper_and_sync(db)
+        except Exception as e:
+            print(f"[scheduler] Scraper failed: {e}")
+        finally:
+            db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create all tables
     Base.metadata.create_all(bind=engine)
 
-    # Seed test data and run scraper on startup in dev mode
     if settings.ENV == "development":
         from .database import SessionLocal
         from .services.scraper_service import run_scraper_and_sync
         from .seed import seed
-        import asyncio
 
         seed()
 
@@ -40,6 +61,9 @@ async def lifespan(app: FastAPI):
                 db.close()
 
         asyncio.create_task(startup_scrape())
+
+    if settings.ENV == "production":
+        asyncio.create_task(_scraper_loop())
 
     yield
 

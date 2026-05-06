@@ -3,16 +3,16 @@ Runs the PSA scraper and syncs results into the database.
 """
 
 import asyncio
-import json
 import re
-import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
+import requests
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..models import Game, Match, Player, Round, Tournament
+from ..models import Game, Match, Player, Ranking, Round, Tournament
 
 ROOT_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -232,9 +232,14 @@ def _infer_winner(score: str, p1_id: int, p2_id: int) -> Optional[int]:
 
 def _update_round_deadlines(db: Session, tournament_id: int) -> None:
     rounds = db.query(Round).filter(Round.tournament_id == tournament_id).all()
+    tournament = db.get(Tournament, tournament_id)
     for r in rounds:
         matches = db.query(Match).filter(Match.round_id == r.id, Match.match_time.isnot(None)).all()
         if not matches:
+            # No match times yet — mark as open if the tournament hasn't started so
+            # the draw is visible and picks can be submitted.
+            if tournament and tournament.status == "upcoming" and r.status not in ("completed", "locked"):
+                r.status = "open"
             continue
         earliest = min(m.match_time for m in matches)
         r.first_match_time = earliest
@@ -251,36 +256,108 @@ def _update_round_deadlines(db: Session, tournament_id: int) -> None:
             r.status = "open"
 
 
-async def run_scraper_and_sync(db: Session) -> None:
-    print("[scraper] Starting PSA scraper...")
+PSA_RANKINGS_API: Dict[str, str] = {
+    "Men":   "https://psa-api.ptsportsuite.com/rankedplayers/male",
+    "Women": "https://psa-api.ptsportsuite.com/rankedplayers/female",
+}
+
+_RANKING_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
+
+
+def scrape_rankings() -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Fetch full PSA world rankings via the PSA API (psa-api.ptsportsuite.com).
+    Returns {"Men": [...], "Women": [...]}.
+    """
+    result: Dict[str, List[Dict[str, Any]]] = {}
+
+    for division, url in PSA_RANKINGS_API.items():
+        resp = requests.get(url, timeout=20, headers=_RANKING_HEADERS)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        entries: List[Dict[str, Any]] = []
+        for player in raw:
+            rank = player.get("World Ranking")
+            name = player.get("Name", "").strip()
+            if not rank or not name:
+                continue
+            entries.append({
+                "rank":        int(rank),
+                "player_name": name,
+                "country":     player.get("Country") or None,
+                "division":    division,
+            })
+
+        entries.sort(key=lambda e: e["rank"])
+        result[division] = entries
+        print(f"[rankings] {division}: {len(entries)} players scraped from PSA API")
+
+    return result
+
+
+def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]]) -> None:
+    """Replace all ranking rows with the freshly scraped data."""
+    # Drop the old unique constraint if it still exists (it incorrectly prevented tied ranks)
     try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            ["python", "main.py", "--json"],
-            capture_output=True,
-            text=True,
-            cwd=str(ROOT_DIR),
-            timeout=300,
+        db.execute(text("ALTER TABLE rankings DROP CONSTRAINT IF EXISTS uq_ranking"))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    db.execute(text("DELETE FROM rankings"))
+    now = datetime.utcnow()
+
+    for division, entries in rankings.items():
+        for entry in entries:
+            db.add(Ranking(
+                division    = division,
+                rank        = entry["rank"],
+                player_name = entry["player_name"],
+                country     = entry.get("country"),
+                updated_at  = now,
+            ))
+
+    db.commit()
+    print(f"[rankings] Sync complete — {sum(len(v) for v in rankings.values())} rows written")
+
+
+async def run_scraper_and_sync(db: Session) -> None:
+    import sys
+    sys.path.insert(0, str(ROOT_DIR))
+    from main import fetch_tournaments, get_reference_date
+    from dataclasses import asdict
+
+    print("[scraper] Starting scraper...")
+    try:
+        tournaments = await fetch_tournaments(
+            limit=None,
+            lookahead_days=14,
+            reference_date=get_reference_date(None),
+            include_tbd=False,
+            debug=False,
         )
-        if result.returncode != 0:
-            print(f"[scraper] Scraper error: {result.stderr[:500]}")
-            return
-
-        data = json.loads(result.stdout)
-        if not isinstance(data, list):
-            print("[scraper] Unexpected scraper output format")
-            return
-
-        print(f"[scraper] Got {len(data)} tournaments from scraper")
+        data = [asdict(t) for t in tournaments]
+        print(f"[scraper] Got {len(data)} tournaments")
         sync_tournaments(db, data)
 
         from .game_engine import evaluate_all_completed_rounds
         evaluate_all_completed_rounds(db)
         print("[scraper] Sync complete")
 
-    except subprocess.TimeoutExpired:
-        print("[scraper] Scraper timed out after 5 minutes")
-    except json.JSONDecodeError as e:
-        print(f"[scraper] Failed to parse scraper output: {e}")
     except Exception as e:
-        print(f"[scraper] Unexpected error: {e}")
+        print(f"[scraper] Failed: {e}")
+
+    # Sync rankings — squashinfo static HTML, fast
+    print("[rankings] Scraping rankings...")
+    try:
+        rankings = await asyncio.to_thread(scrape_rankings)
+        sync_rankings(db, rankings)
+    except Exception as e:
+        print(f"[rankings] Failed: {e}")

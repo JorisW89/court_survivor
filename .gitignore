@@ -14,3 +14,4 @@ psa_snapshot.json
 .DS_Store
 *.egg-info/
 .pytest_cache/
+scripts/

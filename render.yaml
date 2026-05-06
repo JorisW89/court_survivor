@@ -1,11 +1,11 @@
 services:
-  # FastAPI backend API
+  # FastAPI backend API (includes daily scraper loop at 06:00 UTC)
   - type: web
     name: court-survivor-api
     runtime: python
     buildCommand: |
       pip install -r backend/requirements.txt
-      python -m playwright install chromium
+      python -m playwright install --with-deps chromium
     startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
@@ -37,33 +37,3 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
-
-  # Daily scraper cron job
-  - type: cron
-    name: court-survivor-scraper
-    runtime: python
-    schedule: "0 6 * * *"  # 06:00 UTC daily
-    buildCommand: |
-      pip install -r backend/requirements.txt
-      python -m playwright install chromium
-    startCommand: python -c "
-      import asyncio
-      from backend.app.database import SessionLocal
-      from backend.app.services.scraper_service import run_scraper_and_sync
-
-      async def main():
-          db = SessionLocal()
-          try:
-              await run_scraper_and_sync(db)
-          finally:
-              db.close()
-
-      asyncio.run(main())
-      "
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: ENV
-        value: production
-      - key: PYTHON_VERSION
-        value: 3.12.10

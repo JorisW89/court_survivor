@@ -166,3 +166,14 @@ class GroupMember(Base):
     user = relationship("User", back_populates="group_memberships")
 
     __table_args__ = (UniqueConstraint("group_id", "user_id", name="uq_group_member"),)
+
+
+class Ranking(Base):
+    __tablename__ = "rankings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    division = Column(String, nullable=False)       # "Men" or "Women"
+    rank = Column(Integer, nullable=False)
+    player_name = Column(String, nullable=False)
+    country = Column(String)
+    updated_at = Column(DateTime, default=datetime.utcnow)
