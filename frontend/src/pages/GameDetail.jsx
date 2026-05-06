@@ -4,6 +4,62 @@ import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { formatDeadline, formatDateRange } from '../utils/format'
 
+const MATCH_PICK_LOCK_OFFSET_MS = 60 * 60 * 1000
+
+function parseMatchTime(matchTime) {
+  if (!matchTime) return null
+  const normalized = String(matchTime).replace(' ', 'T')
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function getMatchPickDeadline(matchTime) {
+  const startTime = parseMatchTime(matchTime)
+  return startTime ? new Date(startTime.getTime() - MATCH_PICK_LOCK_OFFSET_MS) : null
+}
+
+function formatTimeLeft(ms) {
+  if (ms <= 0) return 'locked'
+
+  const totalSeconds = Math.floor(ms / 1000)
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m ${seconds.toString().padStart(2, '0')}s`
+  return `${seconds}s`
+}
+
+function MatchPickTimer({ match, now }) {
+  const deadline = getMatchPickDeadline(match.match_time)
+
+  if (!deadline) {
+    return (
+      <span className="text-[11px] font-semibold rounded-full bg-gray-50 text-gray-500 px-2.5 py-1">
+        Pick window TBA
+      </span>
+    )
+  }
+
+  const msLeft = deadline.getTime() - now.getTime()
+  const locked = msLeft <= 0 || match.is_locked
+
+  return (
+    <span className={`text-[11px] font-semibold rounded-full px-2.5 py-1 ${
+      locked
+        ? 'bg-amber-50 text-amber-700'
+        : msLeft < 10 * 60 * 1000
+        ? 'bg-red-50 text-red-700'
+        : 'bg-emerald-50 text-emerald-700'
+    }`}>
+      {locked ? 'Pick locked' : `Pick closes in ${formatTimeLeft(msLeft)}`}
+    </span>
+  )
+}
+
 // ── Pick history row ───────────────────────────────────────────────────────
 
 function PickHistoryRow({ pick }) {
@@ -93,9 +149,11 @@ function PlayerButton({ player, state, onClick }) {
   )
 }
 
-function MatchCard({ match, selectedPlayerId, onSelect, roundLocked }) {
+function MatchCard({ match, selectedPlayerId, onSelect, roundLocked, now }) {
   const { player1, player2 } = match
-  const locked = roundLocked || match.is_locked
+  const matchPickDeadline = getMatchPickDeadline(match.match_time)
+  const matchTimerLocked = matchPickDeadline ? now >= matchPickDeadline : false
+  const locked = roundLocked || match.is_locked || matchTimerLocked
 
   function stateFor(player) {
     if (player.already_picked) return 'used'
@@ -112,6 +170,19 @@ function MatchCard({ match, selectedPlayerId, onSelect, roundLocked }) {
 
   return (
     <div className="space-y-1">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+        <MatchPickTimer match={match} now={now} />
+        {match.match_time && (
+          <span className="text-[11px] text-gray-400">
+            Starts {parseMatchTime(match.match_time)?.toLocaleString([], {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+          </span>
+        )}
+      </div>
       <div className="flex items-stretch gap-2">
         <PlayerButton player={player1} state={stateFor(player1)} onClick={() => handleClick(player1)} />
         <div className="flex items-center justify-center w-7 shrink-0">
@@ -119,7 +190,7 @@ function MatchCard({ match, selectedPlayerId, onSelect, roundLocked }) {
         </div>
         <PlayerButton player={player2} state={stateFor(player2)} onClick={() => handleClick(player2)} />
       </div>
-      {match.is_locked && !roundLocked && (
+      {locked && !roundLocked && (
         <p className="text-xs text-amber-600 pl-1">Locked — match starts within 1 hour</p>
       )}
     </div>
@@ -329,6 +400,7 @@ export default function GameDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
+  const [now, setNow] = useState(() => new Date())
 
   const loadGame = useCallback(async () => {
     const r = await api.get(`/games/${id}`)
@@ -365,6 +437,16 @@ export default function GameDetail() {
       .catch(() => setError('Failed to load game'))
       .finally(() => setLoading(false))
   }, []) // eslint-disable-line
+
+  useEffect(() => {
+    const timerId = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(timerId)
+  }, [])
+
+  function isMatchLocked(match) {
+    const deadline = getMatchPickDeadline(match.match_time)
+    return Boolean(match.is_locked || (deadline && now >= deadline))
+  }
 
   async function handleSubmitPick() {
     if (!selectedPlayer || !game?.current_round) return
@@ -414,7 +496,8 @@ export default function GameDetail() {
   const alreadyPickedThisRound = myP?.my_picks?.find(p => p.round_id === currentRound?.id)
   const selectedMatchLocked = selectedPlayer != null && roundData?.matches?.find(
     m => m.player1.id === selectedPlayer || m.player2.id === selectedPlayer
-  )?.is_locked === true
+  )
+  const selectedMatchIsLocked = selectedMatchLocked ? isMatchLocked(selectedMatchLocked) : false
   const selectedPlayerDetail = roundData?.matches
     ?.flatMap(m => [m.player1, m.player2])
     ?.find(p => p.id === selectedPlayer)
@@ -497,6 +580,7 @@ export default function GameDetail() {
                   selectedPlayerId={selectedPlayer}
                   onSelect={canPick ? setSelectedPlayer : () => {}}
                   roundLocked={roundIsLocked}
+                  now={now}
                 />
               ))}
 
@@ -505,12 +589,12 @@ export default function GameDetail() {
                   <PickPointsPreview player={selectedPlayerDetail} />
                   {error    && <p className="text-sm text-red-600">{error}</p>}
                   {successMsg && <p className="text-sm text-emerald-600">{successMsg}</p>}
-                  {selectedMatchLocked && (
+                  {selectedMatchIsLocked && (
                     <p className="text-sm text-amber-600">This match has already locked. Pick a different match.</p>
                   )}
                   <button
                     onClick={handleSubmitPick}
-                    disabled={!selectedPlayer || submitting || selectedMatchLocked}
+                    disabled={!selectedPlayer || submitting || selectedMatchIsLocked}
                     className="btn-primary w-full"
                   >
                     {submitting
