@@ -840,8 +840,11 @@ async def fetch_tournaments(
                     raw_id         = raw_id,
                 ))
 
-        total = sum(len(v) for v in data["divisions"].values())
-        print(f"[enrich] '{best_title}': {enriched}/{total} match(es) enriched with SquashInfo full names")
+        total     = sum(len(v) for v in data["divisions"].values())
+        kept      = len(all_matches)
+        tbd_skip  = total - kept
+        print(f"[enrich] '{best_title}': {kept}/{total} match(es) kept "
+              f"({tbd_skip} TBD-filtered), {enriched}/{kept} enriched with SquashInfo full names")
 
         if all_matches:
             tournaments.append(Tournament(

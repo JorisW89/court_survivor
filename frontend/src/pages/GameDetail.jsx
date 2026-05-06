@@ -166,6 +166,55 @@ function PreviousRoundResult({ round, myPick }) {
   )
 }
 
+// ── Upcoming round draw (read-only, no auth required) ─────────────────────
+
+function UpcomingRoundDraw({ round }) {
+  const [open, setOpen] = useState(true)
+  return (
+    <div className="border border-gray-100 rounded-2xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+      >
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-gray-700 text-sm">{round.round_name}</span>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+            round.status === 'open'   ? 'bg-emerald-50 text-emerald-700' :
+            round.status === 'locked' ? 'bg-amber-50 text-amber-700' :
+                                        'bg-gray-100 text-gray-500'
+          }`}>{round.status}</span>
+        </div>
+        <span className="text-xs text-gray-400">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="divide-y divide-gray-50">
+          {round.matches.map(m => (
+            <div key={m.match_id} className="px-4 py-3 flex items-center gap-3 text-sm">
+              <div className="flex-1 text-right">
+                <span className={m.winner_name === m.player1_name ? 'font-semibold text-gray-900' : 'text-gray-700'}>
+                  {m.player1_name}
+                </span>
+              </div>
+              <span className="text-xs text-gray-300 shrink-0">vs</span>
+              <div className="flex-1">
+                <span className={m.winner_name === m.player2_name ? 'font-semibold text-gray-900' : 'text-gray-700'}>
+                  {m.player2_name}
+                </span>
+              </div>
+              {m.match_time && (
+                <span className="text-xs text-gray-400 shrink-0 hidden sm:block">
+                  {new Date(m.match_time).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Completed round results ────────────────────────────────────────────────
 
 function CompletedRoundResults({ round }) {
@@ -441,17 +490,19 @@ export default function GameDetail() {
         </div>
       )}
 
-      {/* Older completed round results (excluding the most recent, shown above) */}
-      {drawData?.rounds?.some(r => r.status === 'completed' && r.matches?.length > 0 && r.round_id !== lastCompletedRound?.round_id) && (
+      {/* Full draw — all rounds except the current pick round (already shown above) */}
+      {drawData?.rounds?.some(r => r.matches?.length > 0 && r.round_id !== currentRound?.id) && (
         <div className="card">
-          <h2 className="font-semibold text-gray-900 mb-3">Earlier Results</h2>
+          <h2 className="font-semibold text-gray-900 mb-3">Full Draw</h2>
           <div className="space-y-2">
             {drawData.rounds
-              .filter(r => r.status === 'completed' && r.matches?.length > 0 && r.round_id !== lastCompletedRound?.round_id)
-              .sort((a, b) => b.round_order - a.round_order)
-              .map(r => (
-                <CompletedRoundResults key={r.round_id} round={r} />
-              ))}
+              .filter(r => r.matches?.length > 0 && r.round_id !== currentRound?.id)
+              .sort((a, b) => a.round_order - b.round_order)
+              .map(r =>
+                r.status === 'completed'
+                  ? <CompletedRoundResults key={r.round_id} round={r} />
+                  : <UpcomingRoundDraw key={r.round_id} round={r} />
+              )}
           </div>
         </div>
       )}
