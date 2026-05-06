@@ -31,9 +31,15 @@ from ..services.game_engine import (
     get_player_snapshot_rank,
     get_projected_streak_points,
 )
-from ..time_utils import is_locked_before
+from ..time_utils import as_utc, is_locked_before
 
 router = APIRouter()
+
+
+def _serialize_match_time(match_time):
+    if not match_time:
+        return None
+    return as_utc(match_time).isoformat().replace("+00:00", "Z")
 
 
 def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameResponse:
@@ -193,7 +199,7 @@ def get_round_players(
                 ranking_bonus=p2_bonus,
                 potential_points=streak_points + p2_bonus,
             ),
-            match_time=str(m.match_time) if m.match_time else None,
+            match_time=_serialize_match_time(m.match_time),
             is_locked=match_locked,
             is_finished=m.winner_id is not None,
         ))
@@ -248,7 +254,7 @@ def get_draw(
                 player2_name=p2.name,
                 winner_name=winner.name if winner else None,
                 score=m.score,
-                match_time=str(m.match_time) if m.match_time else None,
+                match_time=_serialize_match_time(m.match_time),
             ))
         round_results.append(RoundResult(
             round_id=r.id,
