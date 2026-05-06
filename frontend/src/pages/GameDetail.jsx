@@ -97,6 +97,75 @@ function MatchCard({ match, selectedPlayerId, onSelect, roundLocked }) {
   )
 }
 
+// ── Previous round result (most recent completed, always expanded) ─────────
+
+function PreviousRoundResult({ round, myPick }) {
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-semibold text-gray-900">{round.round_name} Results</h2>
+        {myPick && (
+          <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
+            myPick.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+          }`}>
+            {myPick.is_correct ? `+${myPick.points_awarded} pts` : 'Eliminated'}
+          </span>
+        )}
+      </div>
+
+      {myPick && (
+        <div className={`mb-3 flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm ${
+          myPick.is_correct ? 'bg-emerald-50' : 'bg-red-50'
+        }`}>
+          <span className={`font-bold text-base ${myPick.is_correct ? 'text-emerald-600' : 'text-red-500'}`}>
+            {myPick.is_correct ? '✓' : '✗'}
+          </span>
+          <span className="text-gray-500">Your pick:</span>
+          <span className={`font-semibold ${myPick.is_correct ? 'text-emerald-800' : 'text-red-700'}`}>
+            {myPick.player_name}
+          </span>
+          <span className={`text-xs ml-auto ${myPick.is_correct ? 'text-emerald-600' : 'text-red-500'}`}>
+            {myPick.is_correct ? 'Won' : 'Lost'}
+          </span>
+        </div>
+      )}
+
+      <div className="divide-y divide-gray-50">
+        {round.matches.map(m => {
+          const p1Won = m.winner_name === m.player1_name
+          const p2Won = m.winner_name === m.player2_name
+          const userPickedP1 = myPick?.player_name === m.player1_name
+          const userPickedP2 = myPick?.player_name === m.player2_name
+          return (
+            <div key={m.match_id} className="py-2.5 flex items-center gap-3 text-sm">
+              <div className="flex-1 text-right">
+                <span className={`${p1Won ? 'font-semibold text-gray-900' : 'text-gray-400'} ${userPickedP1 ? 'underline decoration-dotted' : ''}`}>
+                  {m.player1_name}
+                </span>
+                {userPickedP1 && (
+                  <span className="ml-1.5 text-xs text-gray-400">(your pick)</span>
+                )}
+              </div>
+              <span className="text-xs text-gray-300 shrink-0">vs</span>
+              <div className="flex-1">
+                <span className={`${p2Won ? 'font-semibold text-gray-900' : 'text-gray-400'} ${userPickedP2 ? 'underline decoration-dotted' : ''}`}>
+                  {m.player2_name}
+                </span>
+                {userPickedP2 && (
+                  <span className="ml-1.5 text-xs text-gray-400">(your pick)</span>
+                )}
+              </div>
+              {m.score && (
+                <span className="text-xs text-gray-400 shrink-0 hidden sm:block">{m.score}</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ── Completed round results ────────────────────────────────────────────────
 
 function CompletedRoundResults({ round }) {
@@ -225,6 +294,13 @@ export default function GameDetail() {
   const currentRound = game.current_round
   // myP is null for users who haven't picked yet — they can still enter
   const canPick = user && currentRound && ['open', 'upcoming'].includes(currentRound.status) && !myP?.is_eliminated
+
+  const lastCompletedRound = drawData?.rounds
+    ?.filter(r => r.status === 'completed' && r.matches?.length > 0)
+    ?.sort((a, b) => b.round_order - a.round_order)[0]
+  const myLastPick = lastCompletedRound
+    ? myP?.my_picks?.find(p => p.round_id === lastCompletedRound.round_id)
+    : null
   const roundIsLocked = currentRound?.status === 'locked'
   const alreadyPickedThisRound = myP?.my_picks?.find(p => p.round_id === currentRound?.id)
   const selectedMatchLocked = selectedPlayer != null && roundData?.matches?.find(
@@ -267,6 +343,11 @@ export default function GameDetail() {
           <p className="text-xs text-gray-500 mt-0.5">Players</p>
         </div>
       </div>
+
+      {/* Previous round result */}
+      {lastCompletedRound && (
+        <PreviousRoundResult round={lastCompletedRound} myPick={myLastPick} />
+      )}
 
       {/* Elimination banner */}
       {myP?.is_eliminated && (
@@ -360,13 +441,14 @@ export default function GameDetail() {
         </div>
       )}
 
-      {/* Completed round results */}
-      {drawData?.rounds?.some(r => r.status === 'completed' && r.matches.length > 0) && (
+      {/* Older completed round results (excluding the most recent, shown above) */}
+      {drawData?.rounds?.some(r => r.status === 'completed' && r.matches?.length > 0 && r.round_id !== lastCompletedRound?.round_id) && (
         <div className="card">
-          <h2 className="font-semibold text-gray-900 mb-3">Results</h2>
+          <h2 className="font-semibold text-gray-900 mb-3">Earlier Results</h2>
           <div className="space-y-2">
             {drawData.rounds
-              .filter(r => r.status === 'completed' && r.matches.length > 0)
+              .filter(r => r.status === 'completed' && r.matches?.length > 0 && r.round_id !== lastCompletedRound?.round_id)
+              .sort((a, b) => b.round_order - a.round_order)
               .map(r => (
                 <CompletedRoundResults key={r.round_id} round={r} />
               ))}
