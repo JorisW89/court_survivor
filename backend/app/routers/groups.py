@@ -165,7 +165,7 @@ def get_group_leaderboard(
                 GameParticipant.game_id == game.id,
                 GameParticipant.user_id.in_(member_user_ids),
             )
-            .order_by(GameParticipant.is_eliminated, GameParticipant.total_points.desc())
+            .order_by(GameParticipant.total_points.desc(), GameParticipant.joined_at)
             .all()
         )
 

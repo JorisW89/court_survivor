@@ -2,16 +2,111 @@
 Evaluates picks after rounds complete and updates player scores/elimination status.
 """
 
-from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import Game, GameParticipant, Match, Pick, Round
+from ..models import Game, GameParticipant, Match, Pick, Player, Round, TournamentRankingSnapshot
+from ..player_utils import normalize_player_name
+from ..time_utils import has_time_passed
 
 
-def calculate_points(round_order: int, base: int = 1, multiplier: int = 2) -> int:
-    return base * (multiplier ** (round_order - 1))
+def calculate_ranking_bonus(player_rank: Optional[int], opponent_rank: Optional[int]) -> int:
+    if player_rank is None or opponent_rank is None:
+        return 0
+    rank_gap = player_rank - opponent_rank
+    if rank_gap >= 10:
+        return 3
+    if rank_gap >= 5:
+        return 2
+    if rank_gap >= 1:
+        return 1
+    return 0
+
+
+def get_player_snapshot_rank(
+    db: Session,
+    tournament_id: int,
+    division: str,
+    player_name: str,
+) -> Optional[int]:
+    snapshot = db.query(TournamentRankingSnapshot).filter(
+        TournamentRankingSnapshot.tournament_id == tournament_id,
+        TournamentRankingSnapshot.division == division,
+        TournamentRankingSnapshot.normalized_name == normalize_player_name(player_name),
+    ).first()
+    return snapshot.rank if snapshot else None
+
+
+def get_current_streak(db: Session, game_id: int, user_id: int, before_round: Optional[Round] = None) -> int:
+    game = db.get(Game, game_id)
+    if not game:
+        return 0
+
+    rounds_query = db.query(Round).filter(
+        Round.tournament_id == game.tournament_id,
+        Round.division == game.division,
+    )
+    if before_round:
+        rounds_query = rounds_query.filter(Round.round_order < before_round.round_order)
+    else:
+        rounds_query = rounds_query.filter(Round.status == "completed")
+
+    rounds = rounds_query.order_by(Round.round_order.desc()).all()
+    streak = 0
+    for round_obj in rounds:
+        pick = db.query(Pick).filter(
+            Pick.game_id == game_id,
+            Pick.user_id == user_id,
+            Pick.round_id == round_obj.id,
+        ).first()
+        if not pick:
+            break
+        if pick.is_correct is True:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def get_projected_streak_points(db: Session, game_id: int, user_id: int, round_obj: Round) -> int:
+    existing_pick = db.query(Pick).filter(
+        Pick.game_id == game_id,
+        Pick.user_id == user_id,
+        Pick.round_id == round_obj.id,
+    ).first()
+    if existing_pick and existing_pick.is_correct is True:
+        return get_current_streak(db, game_id, user_id)
+    return get_current_streak(db, game_id, user_id, before_round=round_obj) + 1
+
+
+def get_pick_points_breakdown(db: Session, pick: Pick) -> tuple[int, int, Optional[int], Optional[int]]:
+    round_obj = db.get(Round, pick.round_id)
+    game = db.get(Game, pick.game_id)
+    player = db.get(Player, pick.player_id)
+    if not round_obj or not game or not player:
+        return 0, 0, None, None
+
+    match = db.query(Match).filter(
+        Match.round_id == pick.round_id,
+        (Match.player1_id == pick.player_id) | (Match.player2_id == pick.player_id),
+    ).first()
+    opponent = None
+    if match:
+        opponent_id = match.player2_id if match.player1_id == pick.player_id else match.player1_id
+        opponent = db.get(Player, opponent_id) if opponent_id else None
+
+    player_rank = get_player_snapshot_rank(db, game.tournament_id, game.division, player.name)
+    opponent_rank = (
+        get_player_snapshot_rank(db, game.tournament_id, game.division, opponent.name)
+        if opponent else None
+    )
+    ranking_bonus = calculate_ranking_bonus(player_rank, opponent_rank)
+    if pick.is_correct is True:
+        streak_points = max(0, pick.points_awarded - ranking_bonus)
+    else:
+        streak_points = 0
+    return streak_points, ranking_bonus if pick.is_correct is True else 0, player_rank, opponent_rank
 
 
 def get_or_create_participant(db: Session, game_id: int, user_id: int) -> GameParticipant:
@@ -41,30 +136,88 @@ def evaluate_round(db: Session, round_obj: Round) -> None:
 
     for pick in picks:
         participant = get_or_create_participant(db, pick.game_id, pick.user_id)
-        if participant.is_eliminated:
-            continue
-
-        g = db.get(Game, pick.game_id)
+        participant.is_eliminated = False
+        participant.eliminated_at_round_id = None
         if pick.player_id in winner_ids:
             pick.is_correct = True
-            points = calculate_points(round_obj.round_order, g.points_base, g.points_multiplier)
+            streak_points = get_current_streak(db, pick.game_id, pick.user_id, before_round=round_obj) + 1
+            _, ranking_bonus, _, _ = get_pick_points_breakdown(db, pick)
+            points = streak_points + ranking_bonus
             pick.points_awarded = points
             participant.total_points += points
         else:
             pick.is_correct = False
             pick.points_awarded = 0
-            participant.is_eliminated = True
-            participant.eliminated_at_round_id = round_obj.id
 
-    # Eliminate users who didn't pick for this round (if deadline has passed)
-    if round_obj.pick_deadline and datetime.now(timezone.utc) > round_obj.pick_deadline:
-        _eliminate_non_pickers(db, round_obj)
+    # Missing picks are simply a zero-point round and implicitly reset streaks.
+    if round_obj.pick_deadline and has_time_passed(round_obj.pick_deadline):
+        _reset_non_pickers(db, round_obj)
 
     db.commit()
 
 
-def _eliminate_non_pickers(db: Session, round_obj: Round) -> None:
-    """Find active participants in this game who have no pick for this round and eliminate them."""
+def recalculate_game_scores(db: Session, game_id: int) -> None:
+    game = db.get(Game, game_id)
+    if not game:
+        return
+
+    participants = db.query(GameParticipant).filter(GameParticipant.game_id == game_id).all()
+    if not participants:
+        return
+
+    for participant in participants:
+        participant.total_points = 0
+        participant.is_eliminated = False
+        participant.eliminated_at_round_id = None
+
+    rounds = (
+        db.query(Round)
+        .filter(
+            Round.tournament_id == game.tournament_id,
+            Round.division == game.division,
+            Round.status == "completed",
+        )
+        .order_by(Round.round_order)
+        .all()
+    )
+
+    streaks: dict[int, int] = {participant.user_id: 0 for participant in participants}
+    for round_obj in rounds:
+        matches = db.query(Match).filter(Match.round_id == round_obj.id).all()
+        if not matches or not all(m.winner_id for m in matches):
+            continue
+
+        winner_ids = {m.winner_id for m in matches}
+        picks = db.query(Pick).filter(Pick.game_id == game_id, Pick.round_id == round_obj.id).all()
+        picks_by_user = {pick.user_id: pick for pick in picks}
+
+        for participant in participants:
+            pick = picks_by_user.get(participant.user_id)
+            if not pick:
+                streaks[participant.user_id] = 0
+                continue
+
+            if pick.player_id in winner_ids:
+                streaks[participant.user_id] = streaks.get(participant.user_id, 0) + 1
+                pick.is_correct = True
+                _, ranking_bonus, _, _ = get_pick_points_breakdown(db, pick)
+                points = streaks[participant.user_id] + ranking_bonus
+                pick.points_awarded = points
+                participant.total_points += points
+            else:
+                streaks[participant.user_id] = 0
+                pick.is_correct = False
+                pick.points_awarded = 0
+
+
+def recalculate_all_scores(db: Session) -> None:
+    for game in db.query(Game).all():
+        recalculate_game_scores(db, game.id)
+    db.commit()
+
+
+def _reset_non_pickers(db: Session, round_obj: Round) -> None:
+    """Ensure old survivor state does not block participants who missed a pick."""
     # Get the game for this round's tournament+division
     games = db.query(Game).filter(
         Game.tournament_id == round_obj.tournament_id,
@@ -74,7 +227,6 @@ def _eliminate_non_pickers(db: Session, round_obj: Round) -> None:
     for game in games:
         participants = db.query(GameParticipant).filter(
             GameParticipant.game_id == game.id,
-            GameParticipant.is_eliminated == False,
         ).all()
 
         for participant in participants:
@@ -84,8 +236,8 @@ def _eliminate_non_pickers(db: Session, round_obj: Round) -> None:
                 Pick.round_id == round_obj.id,
             ).first()
             if not has_pick:
-                participant.is_eliminated = True
-                participant.eliminated_at_round_id = round_obj.id
+                participant.is_eliminated = False
+                participant.eliminated_at_round_id = None
 
 
 def evaluate_all_completed_rounds(db: Session) -> None:
@@ -100,6 +252,7 @@ def evaluate_all_completed_rounds(db: Session) -> None:
             evaluate_round(db, r)
 
     db.commit()
+    recalculate_all_scores(db)
 
 
 def get_current_round(db: Session, tournament_id: int, division: str) -> Optional[Round]:

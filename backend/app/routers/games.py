@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,6 +24,14 @@ from ..schemas import (
     TournamentResponse,
 )
 from ..services.game_engine import get_current_round
+from ..services.game_engine import (
+    calculate_ranking_bonus,
+    get_current_streak,
+    get_pick_points_breakdown,
+    get_player_snapshot_rank,
+    get_projected_streak_points,
+)
+from ..time_utils import is_locked_before
 
 router = APIRouter()
 
@@ -35,7 +43,7 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
 
     participants = db.query(GameParticipant).filter(GameParticipant.game_id == game.id).all()
     participant_count = len(participants)
-    surviving_count = sum(1 for p in participants if not p.is_eliminated)
+    surviving_count = len(participants)
 
     my_participant = None
     if user:
@@ -51,6 +59,7 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                 r = db.get(Round, pick.round_id)
                 player = db.get(Player, pick.player_id)
                 if r and player:
+                    streak_points, ranking_bonus, player_rank, opponent_rank = get_pick_points_breakdown(db, pick)
                     pick_summaries.append(PickSummary(
                         round_id=pick.round_id,
                         round_name=r.name,
@@ -59,6 +68,10 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                         player_name=player.name,
                         is_correct=pick.is_correct,
                         points_awarded=pick.points_awarded,
+                        streak_points=streak_points,
+                        ranking_bonus=ranking_bonus,
+                        player_rank=player_rank,
+                        opponent_rank=opponent_rank,
                     ))
             pick_summaries.sort(key=lambda x: x.round_order)
 
@@ -72,6 +85,7 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                 is_eliminated=p.is_eliminated,
                 eliminated_at_round_name=eliminated_round_name,
                 total_points=p.total_points,
+                current_streak=get_current_streak(db, game.id, user.id),
                 my_picks=pick_summaries,
             )
 
@@ -145,18 +159,39 @@ def get_round_players(
     )
 
     match_data = []
+    streak_points = get_projected_streak_points(db, game_id, current_user.id, round_obj)
     for m in matches:
         p1 = db.get(Player, m.player1_id) if m.player1_id else None
         p2 = db.get(Player, m.player2_id) if m.player2_id else None
         if not p1 or not p2:
             continue
-        match_locked = bool(
-            m.match_time and datetime.now(timezone.utc) >= m.match_time - timedelta(hours=1)
-        )
+        match_locked = bool(m.match_time and is_locked_before(m.match_time, timedelta(hours=1)))
+        p1_rank = get_player_snapshot_rank(db, game.tournament_id, game.division, p1.name)
+        p2_rank = get_player_snapshot_rank(db, game.tournament_id, game.division, p2.name)
+        p1_bonus = calculate_ranking_bonus(p1_rank, p2_rank)
+        p2_bonus = calculate_ranking_bonus(p2_rank, p1_rank)
         match_data.append(MatchForPick(
             match_id=m.id,
-            player1=PlayerForPick(id=p1.id, name=p1.name, already_picked=p1.id in already_picked_ids),
-            player2=PlayerForPick(id=p2.id, name=p2.name, already_picked=p2.id in already_picked_ids),
+            player1=PlayerForPick(
+                id=p1.id,
+                name=p1.name,
+                already_picked=p1.id in already_picked_ids,
+                rank=p1_rank,
+                opponent_rank=p2_rank,
+                streak_points=streak_points,
+                ranking_bonus=p1_bonus,
+                potential_points=streak_points + p1_bonus,
+            ),
+            player2=PlayerForPick(
+                id=p2.id,
+                name=p2.name,
+                already_picked=p2.id in already_picked_ids,
+                rank=p2_rank,
+                opponent_rank=p1_rank,
+                streak_points=streak_points,
+                ranking_bonus=p2_bonus,
+                potential_points=streak_points + p2_bonus,
+            ),
             match_time=str(m.match_time) if m.match_time else None,
             is_locked=match_locked,
         ))
@@ -237,7 +272,7 @@ def get_leaderboard(
     participants = (
         db.query(GameParticipant)
         .filter(GameParticipant.game_id == game_id)
-        .order_by(GameParticipant.is_eliminated, GameParticipant.total_points.desc())
+        .order_by(GameParticipant.total_points.desc(), GameParticipant.joined_at)
         .all()
     )
 

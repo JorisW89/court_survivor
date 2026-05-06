@@ -23,6 +23,9 @@ if ! python -c "from pathlib import Path; from playwright.sync_api import sync_p
     python -m playwright install chromium
 fi
 
+echo "Running database migrations..."
+alembic -c backend/alembic.ini upgrade head
+
 # Frontend
 if [ ! -d "frontend/node_modules" ]; then
     echo "Installing frontend dependencies..."

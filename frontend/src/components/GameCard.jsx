@@ -3,19 +3,16 @@ import { formatDeadline, formatDateRange } from '../utils/format'
 
 function StatusBadge({ game, myParticipant }) {
   if (!myParticipant) return null
-  if (myParticipant.is_eliminated) {
-    return <span className="badge-eliminated">Eliminated</span>
-  }
   if (myParticipant.my_picks?.length > 0) {
-    return <span className="badge-surviving">Surviving</span>
+    return <span className="badge-surviving">Playing</span>
   }
   return <span className="badge-pending">Pick needed</span>
 }
 
 export default function GameCard({ game }) {
-  const { tournament, division, current_round, participant_count, surviving_count, my_participant } = game
+  const { tournament, division, current_round, participant_count, my_participant } = game
 
-  const needsPick = my_participant && !my_participant.is_eliminated &&
+  const needsPick = my_participant &&
     current_round?.status === 'open' &&
     !my_participant.my_picks?.find(p => p.round_id === current_round?.id)
 
@@ -47,20 +44,20 @@ export default function GameCard({ game }) {
             <span>No active round</span>
           )}
           <span>·</span>
-          <span>{surviving_count} / {participant_count} surviving</span>
+          <span>{participant_count} participant{participant_count !== 1 ? 's' : ''}</span>
         </div>
         <div className="flex items-center gap-2">
           {needsPick && (
             <span className="badge-pending animate-pulse">Pick now!</span>
           )}
           <StatusBadge game={game} myParticipant={my_participant} />
-          {my_participant && !my_participant.is_eliminated && (
+          {my_participant && (
             <span className="text-sm font-semibold text-gray-900">{my_participant.total_points}pts</span>
           )}
         </div>
       </div>
 
-      {current_round?.pick_deadline && !my_participant?.is_eliminated && (
+      {current_round?.pick_deadline && (
         <p className="text-xs text-gray-400 mt-2">
           Last pick closes: {formatDeadline(current_round.pick_deadline)}
         </p>

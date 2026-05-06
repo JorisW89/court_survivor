@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from .database import Base
@@ -182,3 +182,31 @@ class Ranking(Base):
     player_name = Column(String, nullable=False)
     country = Column(String)
     updated_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class TournamentRankingSnapshot(Base):
+    __tablename__ = "tournament_ranking_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
+    division = Column(String, nullable=False)
+    rank = Column(Integer, nullable=False)
+    player_name = Column(String, nullable=False)
+    normalized_name = Column(String, nullable=False)
+    country = Column(String)
+    captured_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tournament_id",
+            "division",
+            "normalized_name",
+            name="uq_tournament_ranking_snapshot_player",
+        ),
+        Index(
+            "ix_tournament_ranking_snapshots_lookup",
+            "tournament_id",
+            "division",
+            "normalized_name",
+        ),
+    )

@@ -5,9 +5,10 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Game, GameParticipant, Match, Pick, Round
+from ..models import Game, Match, Pick, Round
 from ..schemas import PickCreate
 from ..services.game_engine import get_or_create_participant
+from ..time_utils import is_locked_before
 
 router = APIRouter()
 
@@ -33,14 +34,6 @@ def submit_pick(
     if round_obj.status == "completed":
         raise HTTPException(status_code=400, detail="Round is already completed")
 
-    # Check participant is not eliminated
-    participant = db.query(GameParticipant).filter(
-        GameParticipant.game_id == payload.game_id,
-        GameParticipant.user_id == current_user.id,
-    ).first()
-    if participant and participant.is_eliminated:
-        raise HTTPException(status_code=400, detail="You have been eliminated from this game")
-
     # Check player is in this round
     match = db.query(Match).filter(
         Match.round_id == payload.round_id,
@@ -50,7 +43,7 @@ def submit_pick(
         raise HTTPException(status_code=400, detail="Player is not in this round")
 
     # Check per-match deadline: must be > 1 hour before that specific match starts
-    if match.match_time and datetime.now(timezone.utc) >= match.match_time - timedelta(hours=1):
+    if match.match_time and is_locked_before(match.match_time, timedelta(hours=1)):
         raise HTTPException(status_code=400, detail="Pick deadline has passed for this match")
 
     # Check player not already picked in this game
@@ -58,6 +51,7 @@ def submit_pick(
         Pick.game_id == payload.game_id,
         Pick.user_id == current_user.id,
         Pick.player_id == payload.player_id,
+        Pick.round_id != payload.round_id,
     ).first()
     if previous_pick:
         raise HTTPException(status_code=400, detail="You already picked this player in this tournament")
@@ -111,7 +105,7 @@ def delete_pick(
         Match.round_id == round_id,
         (Match.player1_id == pick.player_id) | (Match.player2_id == pick.player_id),
     ).first()
-    if match and match.match_time and datetime.now(timezone.utc) >= match.match_time - timedelta(hours=1):
+    if match and match.match_time and is_locked_before(match.match_time, timedelta(hours=1)):
         raise HTTPException(status_code=400, detail="Pick deadline has passed for this match")
 
     db.delete(pick)

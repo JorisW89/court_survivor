@@ -9,8 +9,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from .config import settings
-from .database import engine
-from .models import Base
 from .routers import auth, games, groups, picks, tournaments
 
 
@@ -42,8 +40,6 @@ async def _scraper_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-
     if settings.ENV == "development":
         from .database import SessionLocal
         from .services.scraper_service import run_scraper_and_sync

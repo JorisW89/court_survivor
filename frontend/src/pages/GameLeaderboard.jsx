@@ -67,17 +67,10 @@ export default function GameLeaderboard() {
                     {entry.username}
                     {entry.user_id === user?.id && <span className="text-xs text-brand-400 ml-1">(you)</span>}
                   </span>
-                  {entry.is_eliminated && entry.eliminated_at_round_name && (
-                    <p className="text-xs text-gray-400">out in {entry.eliminated_at_round_name}</p>
-                  )}
                 </td>
                 <td className="px-4 py-3 text-right font-semibold text-gray-900">{entry.total_points}</td>
                 <td className="px-4 py-3 text-right hidden sm:table-cell">
-                  {entry.is_eliminated ? (
-                    <span className="badge-eliminated">Eliminated</span>
-                  ) : (
-                    <span className="badge-surviving">Surviving</span>
-                  )}
+                  <span className="badge-surviving">Playing</span>
                 </td>
               </tr>
             ))}

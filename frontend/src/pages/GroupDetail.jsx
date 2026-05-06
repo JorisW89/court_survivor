@@ -27,11 +27,7 @@ function LeaderboardTable({ entries, currentUserId }) {
               </td>
               <td className="py-2.5 text-right font-semibold text-gray-900">{entry.total_points}</td>
               <td className="py-2.5 text-right hidden sm:table-cell">
-                {entry.is_eliminated ? (
-                  <span className="badge-eliminated">Out</span>
-                ) : (
-                  <span className="badge-surviving">In</span>
-                )}
+                <span className="badge-surviving">Playing</span>
               </td>
             </tr>
           ))}

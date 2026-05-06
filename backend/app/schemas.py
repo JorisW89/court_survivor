@@ -84,6 +84,10 @@ class PickSummary(BaseModel):
     player_name: str
     is_correct: Optional[bool]
     points_awarded: int
+    streak_points: int = 0
+    ranking_bonus: int = 0
+    player_rank: Optional[int] = None
+    opponent_rank: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -94,6 +98,7 @@ class MyParticipant(BaseModel):
     is_eliminated: bool
     eliminated_at_round_name: Optional[str]
     total_points: int
+    current_streak: int
     my_picks: list[PickSummary]
 
     model_config = {"from_attributes": True}
@@ -116,6 +121,11 @@ class PlayerForPick(BaseModel):
     id: int
     name: str
     already_picked: bool = False
+    rank: Optional[int] = None
+    opponent_rank: Optional[int] = None
+    streak_points: int = 1
+    ranking_bonus: int = 0
+    potential_points: int = 1
 
 
 class MatchForPick(BaseModel):

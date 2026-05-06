@@ -32,8 +32,8 @@ export default function Home() {
           <div className="max-w-lg">
             <h1 className="text-2xl font-bold mb-2">Court Survivor</h1>
             <p className="text-brand-100 mb-4">
-              Pick one player per round. If they win, you advance. If they lose, you're out.
-              You can never pick the same player twice. How far can you survive?
+              Pick one player per round. Correct picks build a streak, upsets add ranking bonuses,
+              and you can never pick the same player twice.
             </p>
             <div className="flex gap-3">
               <Link to="/register" className="bg-white text-brand-600 font-semibold px-4 py-2 rounded-lg hover:bg-brand-50 transition-colors text-sm">

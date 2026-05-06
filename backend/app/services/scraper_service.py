@@ -12,7 +12,8 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..models import Game, Match, Player, Ranking, Round, Tournament
+from ..models import Game, Match, Player, Ranking, Round, Tournament, TournamentRankingSnapshot
+from ..player_utils import normalize_player_name
 
 ROOT_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -149,11 +150,6 @@ ROUND_ORDER_MAP = {
 }
 
 
-def normalize_player_name(name: str) -> str:
-    name = re.sub(r"\s*[\(\[]\d+[\)\]]", "", name)
-    return " ".join(name.split()).strip().lower()
-
-
 def get_round_order(round_name: str) -> int:
     key = round_name.lower().strip()
     return ROUND_ORDER_MAP.get(key, 99)
@@ -251,6 +247,7 @@ def sync_tournaments(db: Session, data: list[dict]) -> None:
         divisions_in_data = {m.get("division") for m in t_data.get("matches", []) if m.get("division")}
         for division in divisions_in_data:
             _ensure_game(db, tournament.id, division)
+            _ensure_ranking_snapshot(db, tournament.id, division)
 
         # Sync matches
         for m_data in t_data.get("matches", []):
@@ -289,6 +286,42 @@ def _ensure_game(db: Session, tournament_id: int, division: str) -> Game:
         game.status = tournament.status
 
     return game
+
+
+def _ensure_ranking_snapshot(db: Session, tournament_id: int, division: str) -> None:
+    has_snapshot = db.query(TournamentRankingSnapshot).filter(
+        TournamentRankingSnapshot.tournament_id == tournament_id,
+        TournamentRankingSnapshot.division == division,
+    ).first()
+    if has_snapshot:
+        return
+
+    rankings = (
+        db.query(Ranking)
+        .filter(Ranking.division == division)
+        .order_by(Ranking.rank, Ranking.player_name)
+        .all()
+    )
+    if not rankings:
+        return
+
+    now = datetime.now(timezone.utc)
+    seen_names = set()
+    for ranking in rankings:
+        normalized_name = normalize_player_name(ranking.player_name)
+        if normalized_name in seen_names:
+            continue
+        seen_names.add(normalized_name)
+
+        db.add(TournamentRankingSnapshot(
+            tournament_id=tournament_id,
+            division=division,
+            rank=ranking.rank,
+            player_name=ranking.player_name,
+            normalized_name=normalized_name,
+            country=ranking.country,
+            captured_at=now,
+        ))
 
 
 def _sync_match(db: Session, tournament: Tournament, m_data: dict, tz_name: Optional[str] = None) -> None:
@@ -447,7 +480,9 @@ def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]]) -> Non
     db.execute(text("DELETE FROM rankings"))
     now = datetime.now(timezone.utc)
 
-    for division, entries in rankings.items():
+    deduped_rankings = _dedupe_rankings(rankings)
+
+    for division, entries in deduped_rankings.items():
         for entry in entries:
             db.add(Ranking(
                 division    = division,
@@ -458,7 +493,32 @@ def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]]) -> Non
             ))
 
     db.commit()
-    print(f"[rankings] Sync complete — {sum(len(v) for v in rankings.values())} rows written")
+    _backfill_missing_ranking_snapshots(db)
+    print(f"[rankings] Sync complete — {sum(len(v) for v in deduped_rankings.values())} rows written")
+
+
+def _dedupe_rankings(rankings: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Keep one ranking row per normalized player, preferring the best rank."""
+    deduped: Dict[str, List[Dict[str, Any]]] = {}
+
+    for division, entries in rankings.items():
+        by_name: Dict[str, Dict[str, Any]] = {}
+        for entry in entries:
+            normalized_name = normalize_player_name(entry["player_name"])
+            existing = by_name.get(normalized_name)
+            if existing is None or entry["rank"] < existing["rank"]:
+                by_name[normalized_name] = entry
+
+        deduped[division] = sorted(by_name.values(), key=lambda entry: (entry["rank"], entry["player_name"]))
+
+    return deduped
+
+
+def _backfill_missing_ranking_snapshots(db: Session) -> None:
+    games = db.query(Game).all()
+    for game in games:
+        _ensure_ranking_snapshot(db, game.tournament_id, game.division)
+    db.commit()
 
 
 async def run_scraper_and_sync(db: Session) -> None:

@@ -22,12 +22,22 @@ function PickHistoryRow({ pick }) {
         </span>
         <div>
           <p className="font-medium text-gray-900">{pick.player_name}</p>
-          <p className="text-xs text-gray-500">{pick.round_name}</p>
+          <p className="text-xs text-gray-500">
+            {pick.round_name}
+            {pick.player_rank && <span> · rank #{pick.player_rank}</span>}
+          </p>
         </div>
       </div>
       <div className="text-right shrink-0">
-        {correct === true  && <span className="text-emerald-700 font-semibold">+{pick.points_awarded} pts</span>}
-        {correct === false && <span className="text-red-600 font-medium">Eliminated</span>}
+        {correct === true  && (
+          <div>
+            <span className="text-emerald-700 font-semibold">+{pick.points_awarded} pts</span>
+            <p className="text-[11px] text-emerald-600">
+              {pick.streak_points} streak{pick.ranking_bonus ? ` + ${pick.ranking_bonus} bonus` : ''}
+            </p>
+          </div>
+        )}
+        {correct === false && <span className="text-red-600 font-medium">Lost · 0 pts</span>}
         {correct === null  && <span className="text-amber-600 text-xs font-medium">Pending</span>}
       </div>
     </div>
@@ -38,7 +48,7 @@ function PickHistoryRow({ pick }) {
 
 function PlayerButton({ player, state, onClick }) {
   // state: 'selected' | 'other-selected' | 'used' | 'idle'
-  const base = 'flex-1 flex flex-col items-center justify-center gap-1 px-3 py-4 rounded-xl border-2 transition-all text-sm font-medium'
+  const base = 'flex-1 flex flex-col items-stretch justify-center gap-2 px-3 py-4 rounded-xl border-2 transition-all text-sm font-medium'
   const styles = {
     selected:       'border-brand-500 bg-brand-50 text-brand-700 shadow-sm',
     'other-selected': 'border-gray-100 bg-gray-50 text-gray-400 opacity-60',
@@ -53,7 +63,26 @@ function PlayerButton({ player, state, onClick }) {
       onClick={onClick}
       className={`${base} ${styles[state]}`}
     >
-      <span className="text-center leading-snug">{player.name}</span>
+      <span className="text-center leading-snug text-gray-900">{player.name}</span>
+      <div className="flex flex-wrap items-center justify-center gap-1.5">
+        <span className="text-[11px] font-semibold rounded-full bg-gray-100 text-gray-600 px-2 py-0.5">
+          {player.rank ? `#${player.rank}` : 'Unranked'}
+        </span>
+        {player.ranking_bonus > 0 && (
+          <span className="text-[11px] font-semibold rounded-full bg-amber-100 text-amber-700 px-2 py-0.5">
+            +{player.ranking_bonus} upset
+          </span>
+        )}
+      </div>
+      <div className={`rounded-lg px-2.5 py-2 text-center ${
+        state === 'selected' ? 'bg-white text-brand-700' : 'bg-gray-50 text-gray-600'
+      }`}>
+        <p className="text-[11px] font-medium uppercase tracking-wide">If they win</p>
+        <p className="text-lg leading-tight font-bold">+{player.potential_points} pts</p>
+        <p className="text-[11px]">
+          {player.streak_points} streak{player.ranking_bonus ? ` + ${player.ranking_bonus} bonus` : ''}
+        </p>
+      </div>
       {state === 'selected' && (
         <span className="text-xs bg-brand-500 text-white rounded-full px-2 py-0.5 mt-1">Your pick</span>
       )}
@@ -97,6 +126,38 @@ function MatchCard({ match, selectedPlayerId, onSelect, roundLocked }) {
   )
 }
 
+function PickPointsPreview({ player }) {
+  if (!player) return null
+  return (
+    <div className="rounded-xl border border-brand-100 bg-brand-50 px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-brand-500">Selected pick</p>
+          <p className="font-semibold text-brand-900">{player.name}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-2xl font-bold text-brand-700">+{player.potential_points}</p>
+          <p className="text-xs text-brand-500">points if they win</p>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+        <div className="rounded-lg bg-white px-2 py-2">
+          <p className="font-bold text-gray-900">#{player.rank || '—'}</p>
+          <p className="text-gray-500">Rank</p>
+        </div>
+        <div className="rounded-lg bg-white px-2 py-2">
+          <p className="font-bold text-gray-900">+{player.streak_points}</p>
+          <p className="text-gray-500">Streak</p>
+        </div>
+        <div className="rounded-lg bg-white px-2 py-2">
+          <p className="font-bold text-gray-900">+{player.ranking_bonus}</p>
+          <p className="text-gray-500">Bonus</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Previous round result (most recent completed, always expanded) ─────────
 
 function PreviousRoundResult({ round, myPick }) {
@@ -108,7 +169,7 @@ function PreviousRoundResult({ round, myPick }) {
           <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
             myPick.is_correct ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
           }`}>
-            {myPick.is_correct ? `+${myPick.points_awarded} pts` : 'Eliminated'}
+            {myPick.is_correct ? `+${myPick.points_awarded} pts` : '0 pts'}
           </span>
         )}
       </div>
@@ -341,8 +402,7 @@ export default function GameDetail() {
 
   const myP = game.my_participant
   const currentRound = game.current_round
-  // myP is null for users who haven't picked yet — they can still enter
-  const canPick = user && currentRound && ['open', 'upcoming'].includes(currentRound.status) && !myP?.is_eliminated
+  const canPick = user && currentRound && ['open', 'upcoming'].includes(currentRound.status)
 
   const lastCompletedRound = drawData?.rounds
     ?.filter(r => r.status === 'completed' && r.matches?.length > 0)
@@ -355,6 +415,9 @@ export default function GameDetail() {
   const selectedMatchLocked = selectedPlayer != null && roundData?.matches?.find(
     m => m.player1.id === selectedPlayer || m.player2.id === selectedPlayer
   )?.is_locked === true
+  const selectedPlayerDetail = roundData?.matches
+    ?.flatMap(m => [m.player1, m.player2])
+    ?.find(p => p.id === selectedPlayer)
 
   return (
     <div className="space-y-6">
@@ -384,12 +447,12 @@ export default function GameDetail() {
           <p className="text-xs text-gray-500 mt-0.5">Your points</p>
         </div>
         <div className="card py-4 text-center">
-          <p className="text-2xl font-bold text-gray-900">{game.surviving_count}</p>
-          <p className="text-xs text-gray-500 mt-0.5">Surviving</p>
+          <p className="text-2xl font-bold text-gray-900">{myP?.current_streak ?? 0}</p>
+          <p className="text-xs text-gray-500 mt-0.5">Current streak</p>
         </div>
         <div className="card py-4 text-center">
           <p className="text-2xl font-bold text-gray-900">{game.participant_count}</p>
-          <p className="text-xs text-gray-500 mt-0.5">Players</p>
+          <p className="text-xs text-gray-500 mt-0.5">Participants</p>
         </div>
       </div>
 
@@ -398,18 +461,8 @@ export default function GameDetail() {
         <PreviousRoundResult round={lastCompletedRound} myPick={myLastPick} />
       )}
 
-      {/* Elimination banner */}
-      {myP?.is_eliminated && (
-        <div className="bg-red-50 border border-red-100 rounded-2xl px-5 py-4">
-          <p className="font-semibold text-red-700">You've been eliminated</p>
-          <p className="text-sm text-red-500 mt-0.5">
-            Eliminated in {myP.eliminated_at_round_name || 'an earlier round'} with {myP.total_points} points.
-          </p>
-        </div>
-      )}
-
       {/* Current round — pick section */}
-      {currentRound && !myP?.is_eliminated && (
+      {currentRound && (
         <div className="card">
           <div className="flex items-center justify-between mb-1">
             <h2 className="font-semibold text-gray-900">{currentRound.name}</h2>
@@ -433,7 +486,7 @@ export default function GameDetail() {
                 {canPick
                   ? alreadyPickedThisRound
                     ? 'Your current pick is highlighted. Tap another player to change it.'
-                    : 'Pick one player from the draw. If they win, you advance.'
+                    : 'Pick one player from the draw. Points shown are awarded if that player wins.'
                   : 'Picks are locked for this round.'}
               </p>
 
@@ -449,6 +502,7 @@ export default function GameDetail() {
 
               {canPick && (
                 <div className="pt-2 space-y-2">
+                  <PickPointsPreview player={selectedPlayerDetail} />
                   {error    && <p className="text-sm text-red-600">{error}</p>}
                   {successMsg && <p className="text-sm text-emerald-600">{successMsg}</p>}
                   {selectedMatchLocked && (
