@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from .config import settings
-from .routers import auth, games, groups, picks, tournaments
+from .routers import admin, auth, games, groups, picks, tournaments
 
 
 def get_cors_origins() -> list[str]:
@@ -18,6 +18,7 @@ def get_cors_origins() -> list[str]:
 
 async def _scraper_loop() -> None:
     from .database import SessionLocal
+    from .models import Tournament
     from .services.scraper_service import run_scraper_and_sync
 
     while True:
@@ -25,9 +26,25 @@ async def _scraper_loop() -> None:
         next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
+
+        # If last sync was more than 24 hours ago, run immediately instead of waiting.
+        db = SessionLocal()
+        try:
+            last_synced = db.query(Tournament.last_synced).order_by(Tournament.last_synced.desc()).scalar()
+        finally:
+            db.close()
+
+        if last_synced is not None:
+            if last_synced.tzinfo is None:
+                last_synced = last_synced.replace(tzinfo=timezone.utc)
+            if (now - last_synced) > timedelta(hours=24):
+                print(f"[scheduler] Last sync was {last_synced.isoformat()}, running catch-up scrape now")
+                next_run = now
+
         wait_seconds = (next_run - now).total_seconds()
-        print(f"[scheduler] Next scrape at {next_run.isoformat()} (in {wait_seconds:.0f}s)")
-        await asyncio.sleep(wait_seconds)
+        if wait_seconds > 0:
+            print(f"[scheduler] Next scrape at {next_run.isoformat()} (in {wait_seconds:.0f}s)")
+            await asyncio.sleep(wait_seconds)
 
         db = SessionLocal()
         try:
@@ -74,6 +91,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(tournaments.router, prefix="/api/tournaments", tags=["tournaments"])
 app.include_router(games.router, prefix="/api/games", tags=["games"])

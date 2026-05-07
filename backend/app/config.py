@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
     ENV: str = "development"
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    ADMIN_SECRET: str = ""
 
     model_config = {"env_file": ".env"}
 
