@@ -1,0 +1,16 @@
+{
+  "name": "Court Survivor",
+  "short_name": "Court Survivor",
+  "description": "Track your court survivor games",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#4f46e5",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
