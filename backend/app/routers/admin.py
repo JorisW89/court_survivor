@@ -8,7 +8,9 @@ router = APIRouter()
 
 
 def verify_admin(x_admin_secret: str = Header(default="")):
-    if not settings.ADMIN_SECRET or x_admin_secret != settings.ADMIN_SECRET:
+    if not settings.ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Admin secret not configured")
+    if x_admin_secret != settings.ADMIN_SECRET:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 

@@ -5,7 +5,7 @@ services:
     runtime: python
     buildCommand: |
       pip install -r backend/requirements.txt
-      python -m playwright install chromium
+      PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/pw-browsers python -m playwright install chromium
     startCommand: alembic -c backend/alembic.ini upgrade head && uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
@@ -21,6 +21,8 @@ services:
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: 10080
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/pw-browsers
       - key: PYTHON_VERSION
         value: 3.12.10
 

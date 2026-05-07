@@ -21,30 +21,35 @@ async def _scraper_loop() -> None:
     from .models import Tournament
     from .services.scraper_service import run_scraper_and_sync
 
+    # One-time startup catch-up: run immediately if last sync is more than 24h ago.
+    db = SessionLocal()
+    try:
+        last_synced = db.query(Tournament.last_synced).order_by(Tournament.last_synced.desc()).limit(1).scalar()
+    finally:
+        db.close()
+
+    if last_synced is not None:
+        if last_synced.tzinfo is None:
+            last_synced = last_synced.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - last_synced) > timedelta(hours=24):
+            print(f"[scheduler] Last sync was {last_synced.isoformat()}, running catch-up scrape now")
+            db = SessionLocal()
+            try:
+                await run_scraper_and_sync(db)
+            except Exception as e:
+                print(f"[scheduler] Catch-up scrape failed: {e}")
+            finally:
+                db.close()
+
+    # Regular daily schedule at 06:00 UTC.
     while True:
         now = datetime.now(timezone.utc)
         next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
-
-        # If last sync was more than 24 hours ago, run immediately instead of waiting.
-        db = SessionLocal()
-        try:
-            last_synced = db.query(Tournament.last_synced).order_by(Tournament.last_synced.desc()).limit(1).scalar()
-        finally:
-            db.close()
-
-        if last_synced is not None:
-            if last_synced.tzinfo is None:
-                last_synced = last_synced.replace(tzinfo=timezone.utc)
-            if (now - last_synced) > timedelta(hours=24):
-                print(f"[scheduler] Last sync was {last_synced.isoformat()}, running catch-up scrape now")
-                next_run = now
-
         wait_seconds = (next_run - now).total_seconds()
-        if wait_seconds > 0:
-            print(f"[scheduler] Next scrape at {next_run.isoformat()} (in {wait_seconds:.0f}s)")
-            await asyncio.sleep(wait_seconds)
+        print(f"[scheduler] Next scrape at {next_run.isoformat()} (in {wait_seconds:.0f}s)")
+        await asyncio.sleep(wait_seconds)
 
         db = SessionLocal()
         try:
