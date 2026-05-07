@@ -49,7 +49,6 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
 
     participants = db.query(GameParticipant).filter(GameParticipant.game_id == game.id).all()
     participant_count = len(participants)
-    surviving_count = len(participants)
 
     my_participant = None
     if user:
@@ -91,15 +90,7 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                     ))
             pick_summaries.sort(key=lambda x: x.round_order)
 
-            eliminated_round_name = None
-            if p.eliminated_at_round_id:
-                er = db.get(Round, p.eliminated_at_round_id)
-                if er:
-                    eliminated_round_name = er.name
-
             my_participant = MyParticipant(
-                is_eliminated=p.is_eliminated,
-                eliminated_at_round_name=eliminated_round_name,
                 total_points=p.total_points,
                 current_streak=get_current_streak(db, game.id, user.id),
                 my_picks=pick_summaries,
@@ -112,7 +103,6 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
         tournament=TournamentResponse.model_validate(tournament),
         current_round=RoundResponse.model_validate(current_round) if current_round else None,
         participant_count=participant_count,
-        surviving_count=surviving_count,
         my_participant=my_participant,
     )
 
@@ -300,18 +290,11 @@ def get_leaderboard(
         user = db.get(User, p.user_id)
         if not user:
             continue
-        eliminated_round_name = None
-        if p.eliminated_at_round_id:
-            er = db.get(Round, p.eliminated_at_round_id)
-            if er:
-                eliminated_round_name = er.name
         entries.append(LeaderboardEntry(
             rank=rank,
             user_id=p.user_id,
             username=user.username,
             total_points=p.total_points,
-            is_eliminated=p.is_eliminated,
-            eliminated_at_round_name=eliminated_round_name,
         ))
         rank += 1
 

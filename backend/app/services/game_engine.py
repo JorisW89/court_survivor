@@ -1,5 +1,5 @@
 """
-Evaluates picks after rounds complete and updates player scores/elimination status.
+Evaluates picks after rounds complete and updates player scores.
 """
 
 from typing import Optional
@@ -136,8 +136,6 @@ def evaluate_round(db: Session, round_obj: Round) -> None:
 
     for pick in picks:
         participant = get_or_create_participant(db, pick.game_id, pick.user_id)
-        participant.is_eliminated = False
-        participant.eliminated_at_round_id = None
         if pick.player_id in winner_ids:
             pick.is_correct = True
             streak_points = get_current_streak(db, pick.game_id, pick.user_id, before_round=round_obj) + 1
@@ -167,8 +165,6 @@ def recalculate_game_scores(db: Session, game_id: int) -> None:
 
     for participant in participants:
         participant.total_points = 0
-        participant.is_eliminated = False
-        participant.eliminated_at_round_id = None
 
     rounds = (
         db.query(Round)
@@ -217,27 +213,7 @@ def recalculate_all_scores(db: Session) -> None:
 
 
 def _reset_non_pickers(db: Session, round_obj: Round) -> None:
-    """Ensure old survivor state does not block participants who missed a pick."""
-    # Get the game for this round's tournament+division
-    games = db.query(Game).filter(
-        Game.tournament_id == round_obj.tournament_id,
-        Game.division == round_obj.division,
-    ).all()
-
-    for game in games:
-        participants = db.query(GameParticipant).filter(
-            GameParticipant.game_id == game.id,
-        ).all()
-
-        for participant in participants:
-            has_pick = db.query(Pick).filter(
-                Pick.game_id == game.id,
-                Pick.user_id == participant.user_id,
-                Pick.round_id == round_obj.id,
-            ).first()
-            if not has_pick:
-                participant.is_eliminated = False
-                participant.eliminated_at_round_id = None
+    """Missing picks are a zero-point round and reset the streak — no further action needed."""
 
 
 def evaluate_all_completed_rounds(db: Session) -> None:

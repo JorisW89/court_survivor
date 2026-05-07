@@ -2,10 +2,10 @@
 Seed the database with test data for local development.
 
 Test accounts (all passwords: testpass123):
-  test@test.com   → testplayer  (survived all rounds of past tournament)
-  alice@test.com  → alice       (eliminated in Semi Final)
-  bob@test.com    → bob         (eliminated in Quarter Final)
-  charlie@test.com → charlie    (eliminated in Last 16)
+  test@test.com    → testplayer  (picked correctly every round, 124 pts past)
+  alice@test.com   → alice       (wrong pick in Final, 60 pts past)
+  bob@test.com     → bob         (wrong pick in Semi Final, 28 pts past)
+  charlie@test.com → charlie     (wrong pick in Quarter Final, 12 pts past)
 """
 
 import secrets
@@ -115,31 +115,31 @@ def seed():
         db.add(past_game)
         db.flush()
 
-        # test_user: won every round — 4+8+16+32+64 = 124 pts
-        _participant(db, past_game, test_user, 124, False)
+        # test_user: correct every round — 4+8+16+32+64 = 124 pts
+        _participant(db, past_game, test_user, 124)
         _pick(db, past_game, test_user, r32, players["M. Asal"],       True,  4)
         _pick(db, past_game, test_user, l16, players["M. Asal"],       True,  8)
         _pick(db, past_game, test_user, qf,  players["M. Asal"],       True,  16)
         _pick(db, past_game, test_user, sf,  players["M. Asal"],       True,  32)
         _pick(db, past_game, test_user, fin, players["M. Asal"],       True,  64)
 
-        # alice: out in Final — 4+8+16+32 = 60 pts
-        _participant(db, past_game, alice, 60, True, fin.id)
+        # alice: wrong in Final — 4+8+16+32 = 60 pts
+        _participant(db, past_game, alice, 60)
         _pick(db, past_game, alice, r32, players["T. Abouelghar"], True,  4)
         _pick(db, past_game, alice, l16, players["T. Abouelghar"], True,  8)
         _pick(db, past_game, alice, qf,  players["T. Abouelghar"], True,  16)
         _pick(db, past_game, alice, sf,  players["S. Farag"],      True,  32)
         _pick(db, past_game, alice, fin, players["T. Abouelghar"], False, 0)
 
-        # bob: out in Semi Final — 4+8+16 = 28 pts
-        _participant(db, past_game, bob, 28, True, sf.id)
+        # bob: wrong in Semi Final — 4+8+16 = 28 pts
+        _participant(db, past_game, bob, 28)
         _pick(db, past_game, bob, r32, players["S. Farag"],  True,  4)
         _pick(db, past_game, bob, l16, players["S. Farag"],  True,  8)
         _pick(db, past_game, bob, qf,  players["S. Farag"],  True,  16)
         _pick(db, past_game, bob, sf,  players["S. Farag"],  False, 0)
 
-        # charlie: out in Quarter Final — 4+8 = 12 pts
-        _participant(db, past_game, charlie, 12, True, qf.id)
+        # charlie: wrong in Quarter Final — 4+8 = 12 pts
+        _participant(db, past_game, charlie, 12)
         _pick(db, past_game, charlie, r32, players["K. Ghosal"], True,  4)
         _pick(db, past_game, charlie, l16, players["K. Ghosal"], True,  8)
         _pick(db, past_game, charlie, qf,  players["K. Ghosal"], False, 0)
@@ -202,20 +202,20 @@ def seed():
         db.add(active_game)
         db.flush()
 
-        # test_user: survived R32 (+8 pts), no L16 pick yet
-        _participant(db, active_game, test_user, 8, False)
+        # test_user: correct R32 (+8 pts), no L16 pick yet
+        _participant(db, active_game, test_user, 8)
         _pick(db, active_game, test_user, ar32, players["M. Asal"], True, 8)
 
-        # alice: eliminated in R32 (picked Kandra who lost)
-        _participant(db, active_game, alice, 0, True, ar32.id)
+        # alice: wrong in R32 (picked Kandra who lost), 0 pts
+        _participant(db, active_game, alice, 0)
         _pick(db, active_game, alice, ar32, players["R. Kandra"], False, 0)
 
-        # bob: survived R32 (+8 pts), no L16 pick yet
-        _participant(db, active_game, bob, 8, False)
+        # bob: correct R32 (+8 pts), no L16 pick yet
+        _participant(db, active_game, bob, 8)
         _pick(db, active_game, bob, ar32, players["S. Farag"], True, 8)
 
-        # charlie: survived R32 (+8 pts), no L16 pick yet
-        _participant(db, active_game, charlie, 8, False)
+        # charlie: correct R32 (+8 pts), no L16 pick yet
+        _participant(db, active_game, charlie, 8)
         _pick(db, active_game, charlie, ar32, players["M. ElShorbagy"], True, 8)
 
         # ── Shared group ───────────────────────────────────────────────────
@@ -233,9 +233,9 @@ def seed():
         print("[seed] Done!")
         print("[seed] Test accounts (password: testpass123):")
         print("       test@test.com   → testplayer  (124 pts past, 8 pts active, L16 pick open)")
-        print("       alice@test.com  → alice        (eliminated in Final / R32)")
-        print("       bob@test.com    → bob           (eliminated in SF / L16 pick open)")
-        print("       charlie@test.com → charlie      (eliminated in QF / L16 pick open)")
+        print("       alice@test.com   → alice        (wrong pick in Final / wrong in R32, L16 open)")
+        print("       bob@test.com     → bob          (wrong pick in SF / correct R32, L16 open)")
+        print("       charlie@test.com → charlie      (wrong pick in QF / correct R32, L16 open)")
 
     except Exception as e:
         db.rollback()
@@ -281,12 +281,8 @@ def _match(db, tournament, round_obj, division, players, p1, p2, winner, raw_id)
     return m
 
 
-def _participant(db, game, user, points, is_eliminated, elim_round_id=None):
-    p = GameParticipant(
-        game_id=game.id, user_id=user.id,
-        total_points=points, is_eliminated=is_eliminated,
-        eliminated_at_round_id=elim_round_id,
-    )
+def _participant(db, game, user, points):
+    p = GameParticipant(game_id=game.id, user_id=user.id, total_points=points)
     db.add(p)
     db.flush()
     return p

@@ -96,8 +96,6 @@ class PickSummary(BaseModel):
 # --- Game ---
 
 class MyParticipant(BaseModel):
-    is_eliminated: bool
-    eliminated_at_round_name: Optional[str]
     total_points: int
     current_streak: int
     my_picks: list[PickSummary]
@@ -112,7 +110,6 @@ class GameResponse(BaseModel):
     tournament: TournamentResponse
     current_round: Optional[RoundResponse]
     participant_count: int
-    surviving_count: int
     my_participant: Optional[MyParticipant] = None
 
     model_config = {"from_attributes": True}
@@ -151,8 +148,6 @@ class LeaderboardEntry(BaseModel):
     user_id: int
     username: str
     total_points: int
-    is_eliminated: bool
-    eliminated_at_round_name: Optional[str]
 
 
 class LeaderboardResponse(BaseModel):

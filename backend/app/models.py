@@ -114,14 +114,11 @@ class GameParticipant(Base):
     id = Column(Integer, primary_key=True, index=True)
     game_id = Column(Integer, ForeignKey("games.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    is_eliminated = Column(Boolean, default=False)
-    eliminated_at_round_id = Column(Integer, ForeignKey("rounds.id"), nullable=True)
     total_points = Column(Integer, default=0)
     joined_at = Column(DateTime(timezone=True), default=_utcnow)
 
     game = relationship("Game", back_populates="participants")
     user = relationship("User", back_populates="game_participants")
-    eliminated_at_round = relationship("Round", foreign_keys=[eliminated_at_round_id])
 
     __table_args__ = (UniqueConstraint("game_id", "user_id", name="uq_participant"),)
 

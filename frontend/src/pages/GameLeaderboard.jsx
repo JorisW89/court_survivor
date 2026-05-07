@@ -70,7 +70,7 @@ export default function GameLeaderboard() {
                 </td>
                 <td className="px-4 py-3 text-right font-semibold text-gray-900">{entry.total_points}</td>
                 <td className="px-4 py-3 text-right hidden sm:table-cell">
-                  <span className="badge-surviving">Playing</span>
+                  <span className="badge-active">Playing</span>
                 </td>
               </tr>
             ))}

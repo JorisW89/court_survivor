@@ -27,7 +27,7 @@ function LeaderboardTable({ entries, currentUserId }) {
               </td>
               <td className="py-2.5 text-right font-semibold text-gray-900">{entry.total_points}</td>
               <td className="py-2.5 text-right hidden sm:table-cell">
-                <span className="badge-surviving">Playing</span>
+                <span className="badge-active">Playing</span>
               </td>
             </tr>
           ))}

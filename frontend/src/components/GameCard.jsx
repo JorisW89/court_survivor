@@ -4,7 +4,7 @@ import { formatDeadline, formatDateRange } from '../utils/format'
 function StatusBadge({ game, myParticipant }) {
   if (!myParticipant) return null
   if (myParticipant.my_picks?.length > 0) {
-    return <span className="badge-surviving">Playing</span>
+    return <span className="badge-active">Playing</span>
   }
   return <span className="badge-pending">Pick needed</span>
 }

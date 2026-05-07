@@ -178,18 +178,11 @@ def get_group_leaderboard(
             user = db.get(User, p.user_id)
             if not user:
                 continue
-            eliminated_round_name = None
-            if p.eliminated_at_round_id:
-                er = db.get(Round, p.eliminated_at_round_id)
-                if er:
-                    eliminated_round_name = er.name
             entries.append(LeaderboardEntry(
                 rank=rank,
                 user_id=p.user_id,
                 username=user.username,
                 total_points=p.total_points,
-                is_eliminated=p.is_eliminated,
-                eliminated_at_round_name=eliminated_round_name,
             ))
             rank += 1
 
