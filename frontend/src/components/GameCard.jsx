@@ -16,6 +16,10 @@ export default function GameCard({ game }) {
     current_round?.status === 'open' &&
     !my_participant.my_picks?.find(p => p.round_id === current_round?.id)
 
+  const currentPick = current_round
+    ? my_participant?.my_picks?.find(p => p.round_id === current_round.id)
+    : null
+
   return (
     <Link
       to={`/games/${game.id}`}
@@ -57,8 +61,20 @@ export default function GameCard({ game }) {
         </div>
       </div>
 
+      {currentPick && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-500">
+          <span className="font-medium text-gray-700">{currentPick.player_name}</span>
+          {currentPick.opponent_name && (
+            <>
+              <span className="text-gray-300">vs</span>
+              <span>{currentPick.opponent_name}</span>
+            </>
+          )}
+        </div>
+      )}
+
       {current_round?.pick_deadline && (
-        <p className="text-xs text-gray-400 mt-2">
+        <p className="text-xs text-gray-400 mt-1">
           Last pick closes: {formatDeadline(current_round.pick_deadline)}
         </p>
       )}

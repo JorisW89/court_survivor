@@ -66,6 +66,15 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                 player = db.get(Player, pick.player_id)
                 if r and player:
                     streak_points, ranking_bonus, player_rank, opponent_rank = get_pick_points_breakdown(db, pick)
+                    match = db.query(MatchModel).filter(
+                        MatchModel.round_id == pick.round_id,
+                        (MatchModel.player1_id == pick.player_id) | (MatchModel.player2_id == pick.player_id),
+                    ).first()
+                    opponent_name = None
+                    if match:
+                        opp_id = match.player2_id if match.player1_id == pick.player_id else match.player1_id
+                        opp = db.get(Player, opp_id) if opp_id else None
+                        opponent_name = opp.name if opp else None
                     pick_summaries.append(PickSummary(
                         round_id=pick.round_id,
                         round_name=r.name,
@@ -78,6 +87,7 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                         ranking_bonus=ranking_bonus,
                         player_rank=player_rank,
                         opponent_rank=opponent_rank,
+                        opponent_name=opponent_name,
                     ))
             pick_summaries.sort(key=lambda x: x.round_order)
 

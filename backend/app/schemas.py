@@ -88,6 +88,7 @@ class PickSummary(BaseModel):
     ranking_bonus: int = 0
     player_rank: Optional[int] = None
     opponent_rank: Optional[int] = None
+    opponent_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
