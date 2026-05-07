@@ -30,7 +30,7 @@ async def _scraper_loop() -> None:
         # If last sync was more than 24 hours ago, run immediately instead of waiting.
         db = SessionLocal()
         try:
-            last_synced = db.query(Tournament.last_synced).order_by(Tournament.last_synced.desc()).scalar()
+            last_synced = db.query(Tournament.last_synced).order_by(Tournament.last_synced.desc()).limit(1).scalar()
         finally:
             db.close()
 
