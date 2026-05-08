@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-PSA tournament scraper — PSA-first approach:
-  - psasquashtour.com  →  match pairs + times (Playwright, JS-rendered SPA)
-  - squashinfo.com     →  full player names + scores (static HTML, name enrichment only)
+PSA tournament scraper — PSA-only approach:
+  - psasquashtour.com  →  full player names, rankings, match times (Playwright, JS-rendered SPA)
 
-PSA is the source of truth for match scheduling. Every match stored will have a
-time. SquashInfo enriches player names (full name vs. abbreviated "M. ElShorbagy").
-When SquashInfo has no match for a PSA entry, the PSA abbreviated name is kept.
+Full player names and rankings are extracted directly from the H2H data-attributes
+baked into the draw page DOM. No secondary source needed.
 
 Usage:
     python main.py
@@ -30,16 +28,12 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
-from playwright.async_api import async_playwright, BrowserContext, Page
+from playwright.async_api import async_playwright, BrowserContext
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-
-SQUASHINFO_BASE         = "https://www.squashinfo.com"
-SQUASHINFO_CALENDAR_URL = "https://www.squashinfo.com/calendar"
 
 PSA_BASE            = "https://www.psasquashtour.com"
 PSA_TOURNAMENTS_URL = "https://www.psasquashtour.com/tournaments/"
@@ -47,23 +41,7 @@ PSA_TOURNAMENTS_URL = "https://www.psasquashtour.com/tournaments/"
 SNAPSHOT_FILE  = Path("psa_snapshot.json")
 LOOKAHEAD_DAYS = 14
 
-ROUND_NORM: Dict[str, str] = {
-    "1st round":              "Round 1",
-    "2nd round":              "Round 2",
-    "last 64":                "Round 1",
-    "last 32":                "Round 2",
-    "last thirty-two round":  "Round 2",
-    "last sixteen round":     "Last 16",
-    "round of 16":            "Last 16",
-    "last 16":                "Last 16",
-    "quarter-finals":         "Quarter Final",
-    "quarter finals":         "Quarter Final",
-    "semi-finals":            "Semi Final",
-    "semi finals":            "Semi Final",
-    "final":                  "Final",
-}
-
-_PSA_ROUND_HEADERS: Dict[str, str] = {
+_PSA_ROUND_MAP: Dict[str, str] = {
     "round 1":       "Round 1",
     "round 2":       "Round 2",
     "round 3":       "Round 3",
@@ -81,30 +59,6 @@ _PSA_ROUND_HEADERS: Dict[str, str] = {
     "semi final":    "Semi Final",
     "final":         "Final",
 }
-
-# Time pattern used in PSA draw text: "08 MAY 2026 • 20:15"
-PSA_TIME_RE = re.compile(
-    r"\b\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\s*•\s*\d{1,2}:\d{2}\b",
-    flags=re.I,
-)
-
-MONTH_WORDS = {
-    "jan", "january", "feb", "february", "mar", "march", "apr", "april",
-    "may", "jun", "june", "jul", "july", "aug", "august",
-    "sep", "september", "oct", "october", "nov", "november", "dec", "december",
-}
-
-SQUASHINFO_MATCH_RE = re.compile(
-    r"(?:\[\s*[\w/]+\s*\]\s+)?"
-    r"([A-Za-zÀ-ɏ][A-Za-zÀ-ɏ '\-\.]+?)"
-    r"\s+\([A-Z]{3,4}\)"
-    r"\s+(bt|v)\s+"
-    r"(?:\[\s*[\w/]+\s*\]\s+)?"
-    r"([A-Za-zÀ-ɏ][A-Za-zÀ-ɏ '\-\.]+?)"
-    r"\s+\([A-Z]{3,4}\)",
-)
-
-SCORE_LINE_RE = re.compile(r"^\d{1,2}-\d{1,2}")
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -174,18 +128,6 @@ def is_within_window(
     return start <= window_end and end >= reference_date
 
 
-def dates_overlap(
-    s1: Optional[str], e1: Optional[str],
-    s2: Optional[str], e2: Optional[str],
-) -> bool:
-    a = parse_iso_date(s1)
-    b = parse_iso_date(e1)
-    c = parse_iso_date(s2)
-    d = parse_iso_date(e2)
-    if not (a and b and c and d):
-        return False
-    return a <= d and b >= c
-
 
 def infer_category(title: str) -> Optional[str]:
     lowered = title.lower()
@@ -223,165 +165,6 @@ def extract_surname(name: str) -> str:
     return _normalize_surname_str(name.strip())
 
 
-def match_surname_key(name1: str, name2: str) -> Tuple[str, str]:
-    return tuple(sorted([extract_surname(name1), extract_surname(name2)]))
-
-
-# ── Player name helpers ───────────────────────────────────────────────────────
-
-def _is_tbd(name: str) -> bool:
-    return name.lower().strip() in {"tbd", "t.b.d.", "to be determined", "bye", ""}
-
-
-def _format_psa_name(name: str) -> str:
-    """Strip seed/rank annotations: 'M. ElShorbagy (1)' → 'M. ElShorbagy'"""
-    return re.sub(r"\s*[\(\[]\w+[\)\]]", "", name).strip()
-
-
-# ── squashinfo scraping (requests + BeautifulSoup) ───────────────────────────
-
-def fetch_html(url: str) -> str:
-    resp = requests.get(
-        url,
-        timeout=20,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/123.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-GB,en;q=0.9",
-        },
-    )
-    resp.raise_for_status()
-    return resp.text
-
-
-def parse_event_dates(html: str) -> Tuple[Optional[str], Optional[str]]:
-    soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text(" ")
-    m = re.search(r"(\d{1,2})\s*[-–]\s*(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", text)
-    if m:
-        day1, day2, month, year = m.groups()
-        try:
-            start = date_parser.parse(f"{day1} {month} {year}").date().isoformat()
-            end   = date_parser.parse(f"{day2} {month} {year}").date().isoformat()
-            return start, end
-        except Exception:
-            pass
-    return None, None
-
-
-def parse_calendar_event_links(html: str) -> List[Dict[str, Any]]:
-    soup = BeautifulSoup(html, "html.parser")
-    events: List[Dict[str, Any]] = []
-    seen: set = set()
-
-    for a in soup.find_all("a", href=re.compile(r"^/events/")):
-        href  = a.get("href", "")
-        url   = SQUASHINFO_BASE + href
-        if url in seen:
-            continue
-        seen.add(url)
-
-        title = a.get_text(strip=True)
-        if not title:
-            continue
-
-        tl, hl = title.lower(), href.lower()
-        if "women" in tl or "women" in hl:
-            division = "Women"
-        elif "men" in tl or "men" in hl:
-            division = "Men"
-        else:
-            division = None
-
-        events.append({"url": url, "title": title, "division": division})
-
-    return events
-
-
-def parse_event_matches(
-    html: str,
-    tournament_title: str,
-    tournament_url: str,
-    division: str,
-    include_tbd: bool,
-    debug: bool,
-) -> List[Match]:
-    soup   = BeautifulSoup(html, "html.parser")
-    tables = soup.find_all("table")
-    if len(tables) < 2:
-        return []
-
-    match_table   = tables[1]
-    matches: List[Match] = []
-    seen:    set         = set()
-    current_round: Optional[str] = None
-
-    def _clean(td) -> str:
-        return " ".join(td.get_text(" ").split())
-
-    for row in match_table.find_all("tr"):
-        td_type = row.find("td", class_="match_type")
-        if td_type:
-            key = td_type.get_text(strip=True).rstrip(":").strip().lower()
-            current_round = ROUND_NORM.get(key, current_round)
-            continue
-
-        if not row.get("id", "").startswith("match_"):
-            continue
-
-        tds = row.find_all("td")
-        if not tds:
-            continue
-
-        if len(tds) == 1:
-            line  = _clean(tds[0])
-            score = None
-        else:
-            col2 = _clean(tds[1])
-            if col2.lower() == "bye":
-                continue
-            line  = _clean(tds[0])
-            score = re.sub(r"\s*\(\d+m\)\s*$", "", col2).strip() or None
-
-        m = SQUASHINFO_MATCH_RE.search(line)
-        if not m:
-            continue
-
-        name1, verb, name2 = m.groups()
-        name1, name2 = name1.strip(), name2.strip()
-        is_done = verb == "bt"
-
-        key = (division, current_round, name1, name2)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        matches.append(Match(
-            tournament     = tournament_title,
-            tournament_url = tournament_url,
-            division       = division,
-            round_name     = current_round,
-            player1        = name1,
-            player2        = name2,
-            score          = score,
-            winner         = name1 if is_done else None,
-            status         = "completed" if is_done else "upcoming",
-            match_time     = None,
-            source         = "squashinfo",
-            raw_id         = stable_hash({
-                "tournament": tournament_title,
-                "division":   division,
-                "round":      current_round,
-                "p1":         name1,
-                "p2":         name2,
-            }),
-        ))
-
-    return matches
-
 
 # ── PSA scraping (Playwright) ─────────────────────────────────────────────────
 
@@ -394,70 +177,50 @@ async def _block_heavy_assets(context: BrowserContext) -> None:
     await context.route("**/*", handler)
 
 
-async def _click_text(page: Page, labels: List[str]) -> bool:
-    for label in labels:
-        try:
-            loc = page.get_by_text(label, exact=True).first
-            if await loc.count():
-                await loc.click(timeout=3_000)
-                await page.wait_for_timeout(1_500)
-                return True
-        except Exception:
-            pass
-    return False
+_PSA_H2H_EXTRACT_JS = """() => {
+    const ROUND_MAP = """ + json.dumps(_PSA_ROUND_MAP) + """;
 
+    function normalizeRound(text) {
+        return ROUND_MAP[text.trim().toLowerCase()] || text.trim();
+    }
 
-def _is_psa_player_line(line: str) -> bool:
-    if not line or len(line) > 60:
-        return False
-    if not re.search(r"[A-Za-z]", line):
-        return False
-    if PSA_TIME_RE.search(line):
-        return False
-    if any(w in line.lower().split() for w in MONTH_WORDS):
-        return False
-    if re.fullmatch(r"[\d\s\-–—]+", line):
-        return False
-    return True
+    function extractMatches(container) {
+        const matches = [];
+        container.querySelectorAll('a.show-head-to-head-modal[data-player1-name]').forEach(btn => {
+            const p1 = btn.dataset.player1Name;
+            const p2 = btn.dataset.player2Name;
+            if (!p1 || !p2) return;
 
+            const matchDetails = btn.closest('.match-details');
+            const timeEl = matchDetails ? matchDetails.querySelector('.match-details-date') : null;
+            const timeText = timeEl ? timeEl.textContent.trim() : null;
+            if (!timeText) return;
 
-def _extract_psa_matches(visible_text: str) -> List[Dict[str, Any]]:
-    """
-    Parse PSA draw visible text → list of match dicts.
-    Each match has: player1, player2 (abbreviated PSA names), match_time, round_name.
-    Only matches with a scheduled time are returned.
-    """
-    lines = [l.strip() for l in visible_text.splitlines() if l.strip()]
-    matches: List[Dict[str, Any]] = []
-    current_round: Optional[str] = None
+            const roundDiv = btn.closest('.round');
+            const roundEl = roundDiv ? roundDiv.querySelector('.round-heading') : null;
+            const roundText = roundEl ? normalizeRound(roundEl.textContent) : null;
 
-    for index, line in enumerate(lines):
-        # Detect round headers (try exact key and without trailing 's')
-        lk = line.lower().strip().rstrip(":").strip()
-        for candidate in (lk, lk.rstrip("s")):
-            if candidate in _PSA_ROUND_HEADERS:
-                current_round = _PSA_ROUND_HEADERS[candidate]
-                break
+            matches.push({
+                player1:         p1,
+                player1_ranking: btn.dataset.player1Ranking || null,
+                player1_country: btn.dataset.player1Country || null,
+                player2:         p2,
+                player2_ranking: btn.dataset.player2Ranking || null,
+                player2_country: btn.dataset.player2Country || null,
+                match_time:      timeText,
+                round_name:      roundText,
+            });
+        });
+        return matches;
+    }
 
-        if not PSA_TIME_RE.fullmatch(line):
-            continue
-
-        # Found time line — find the two player name lines before it
-        scan_start = max(0, index - 18)
-        candidates = [l for l in lines[scan_start:index] if _is_psa_player_line(l)]
-
-        if len(candidates) < 2:
-            continue
-
-        p1, p2 = candidates[-2], candidates[-1]
-        matches.append({
-            "player1":    p1,
-            "player2":    p2,
-            "match_time": line,
-            "round_name": current_round,
-        })
-
-    return matches
+    const result = {};
+    const mens   = document.querySelector('.tab-content.mens');
+    const womens = document.querySelector('.tab-content.womens');
+    if (mens)   result['Men']   = extractMatches(mens);
+    if (womens) result['Women'] = extractMatches(womens);
+    return result;
+}"""
 
 
 def _parse_psa_date_range(text: str, reference_year: int) -> Tuple[Optional[str], Optional[str]]:
@@ -583,9 +346,10 @@ async def _scrape_psa_draw_matches(
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Scrape PSA draw page → {division: [match_dict]}.
-    Each match_dict: {player1, player2, match_time, round_name} with PSA abbreviated names.
+    Each match_dict has full player names, rankings, countries, match_time, round_name
+    extracted from the H2H data-attributes baked into the DOM.
     """
-    page   = await context.new_page()
+    page = await context.new_page()
     result: Dict[str, List[Dict[str, Any]]] = {}
 
     try:
@@ -595,19 +359,9 @@ async def _scrape_psa_draw_matches(
         except Exception:
             await page.wait_for_timeout(4_000)
 
-        for division in ["Men", "Women"]:
-            await _click_text(page, ["MAIN DRAW", "Main Draw", "Draw"])
-            labels = (["MEN'S", "Men's", "Men"] if division == "Men"
-                      else ["WOMEN'S", "Women's", "Women"])
-            await _click_text(page, labels)
-            await page.wait_for_timeout(1_500)
+        raw = await page.evaluate(_PSA_H2H_EXTRACT_JS)
 
-            try:
-                visible_text = await page.locator("body").inner_text(timeout=10_000)
-            except Exception:
-                continue
-
-            matches = _extract_psa_matches(visible_text)
+        for division, matches in raw.items():
             if matches:
                 result[division] = matches
                 if debug:
@@ -632,15 +386,13 @@ async def fetch_tournaments(
     world_events_only: bool = True,
 ) -> List[Tournament]:
     """
-    PSA-first pipeline:
+    PSA-only pipeline:
     1. PSA listing    → tournament URLs, dates, locations, titles
-    2. PSA draw pages → match pairs + times (abbreviated names)
-    3. SquashInfo     → full player names + scores (name enrichment only)
-    4. Merge: use full names where matched, abbreviated PSA names otherwise
+    2. PSA draw pages → full player names, rankings, match times (from H2H DOM attributes)
+    3. Build Tournament objects
     """
 
-    # ── Phase 1 & 2: PSA via Playwright ───────────────────────────────────────
-    psa_draw_data: Dict[str, Dict[str, Any]] = {}  # psa_url → {listing, divisions}
+    psa_draw_data: Dict[str, Dict[str, Any]] = {}
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
@@ -683,178 +435,55 @@ async def fetch_tournaments(
 
         await browser.close()
 
-    # ── Phase 3: SquashInfo name/score enrichment (requests) ──────────────────
-    # Build a list of per-event lookups: {surname_pair → (full1, full2, score, winner, round_name)}
-    si_events: List[Dict[str, Any]] = []
-
-    if debug:
-        print("[debug] Fetching SquashInfo calendar for name enrichment…")
-
-    try:
-        calendar_html = await asyncio.to_thread(fetch_html, SQUASHINFO_CALENDAR_URL)
-        raw_events    = parse_calendar_event_links(calendar_html)
-        current_year  = str(reference_date.year)
-        raw_events    = [e for e in raw_events if current_year in e["url"]]
-
-        for event in raw_events:
-            division = event["division"]
-            if division not in ("Men", "Women"):
-                continue
-
-            try:
-                html = await asyncio.to_thread(fetch_html, event["url"])
-            except Exception:
-                continue
-
-            start_date, end_date = parse_event_dates(html)
-            # Use a generous window (60 days) so minor date mismatches on SquashInfo
-            # don't silently drop events — dates_overlap() is the real filter when
-            # we pair SquashInfo events against specific PSA tournaments.
-            if not is_within_window(start_date, end_date, reference_date, 60):
-                continue
-
-            si_title  = strip_gender(event["title"])
-            si_matches = parse_event_matches(
-                html             = html,
-                tournament_title = si_title,
-                tournament_url   = event["url"],
-                division         = division,
-                include_tbd      = include_tbd,
-                debug            = debug,
-            )
-
-            full_key_lookup: Dict[Tuple[str, str], tuple] = {}
-            last_word_lookup: Dict[Tuple[str, str], tuple] = {}
-
-            for m in si_matches:
-                if not m.player1 or not m.player2:
-                    continue
-                entry    = (m.player1, m.player2, m.score, m.winner, m.round_name, si_title)
-                full_key = match_surname_key(m.player1, m.player2)
-                full_key_lookup.setdefault(full_key, entry)
-
-                lw1    = extract_surname(m.player1).split()[-1]
-                lw2    = extract_surname(m.player2).split()[-1]
-                lw_key = tuple(sorted([lw1, lw2]))
-                last_word_lookup.setdefault(lw_key, entry)
-
-            si_events.append({
-                "start":     start_date,
-                "end":       end_date,
-                "division":  division,
-                "si_title":  si_title,
-                "full_key":  full_key_lookup,
-                "last_word": last_word_lookup,
-            })
-
-    except Exception as exc:
-        print(f"[enrich] SquashInfo enrichment failed: {exc}")
-        if debug:
-            import traceback; traceback.print_exc()
-
-    # ── Phase 4: Build Tournament objects ─────────────────────────────────────
+    # ── Build Tournament objects ───────────────────────────────────────────────
     tournaments: List[Tournament] = []
 
     for psa_url, data in psa_draw_data.items():
         listing    = data["listing"]
-        psa_title  = listing.get("title", "Unknown")
+        psa_title  = strip_gender(listing.get("title", "Unknown"))
         start_date = listing["start_date"]
         end_date   = listing["end_date"]
         location   = listing.get("location")
 
-        # Collect SquashInfo lookups whose dates overlap this PSA tournament
-        matching_si: Dict[str, Dict[str, Any]] = {
-            div: {"full_key": {}, "last_word": {}, "si_title": None}
-            for div in ["Men", "Women"]
-        }
-        for si in si_events:
-            if not dates_overlap(start_date, end_date, si["start"], si["end"]):
-                continue
-            div = si["division"]
-            matching_si[div]["full_key"].update(si["full_key"])
-            matching_si[div]["last_word"].update(si["last_word"])
-            if si["si_title"] and not matching_si[div]["si_title"]:
-                matching_si[div]["si_title"] = si["si_title"]
-
-        # Prefer the longer SquashInfo title (sponsor names etc.) over PSA short title
-        si_titles  = [v["si_title"] for v in matching_si.values() if v["si_title"]]
-        best_title = max(si_titles, key=len) if si_titles else strip_gender(psa_title)
-
         all_matches: List[Match] = []
-        enriched = 0
 
         for division, psa_matches in data["divisions"].items():
-            full_kl = matching_si[division]["full_key"]
-            lw_kl   = matching_si[division]["last_word"]
-
             for pm in psa_matches:
-                p1_raw = pm["player1"]
-                p2_raw = pm["player2"]
-
-                # Skip TBD vs TBD always; skip one-sided TBD unless include_tbd
-                both_tbd   = _is_tbd(p1_raw) and _is_tbd(p2_raw)
-                either_tbd = _is_tbd(p1_raw) or _is_tbd(p2_raw)
-                if both_tbd:
-                    continue
-                if not include_tbd and either_tbd:
-                    continue
-
-                # Look up SquashInfo full names: exact surname pair, then last-word fallback
-                full_key = match_surname_key(p1_raw, p2_raw)
-                lw1      = extract_surname(p1_raw).split()[-1]
-                lw2      = extract_surname(p2_raw).split()[-1]
-                lw_key   = tuple(sorted([lw1, lw2]))
-
-                si_entry = full_kl.get(full_key) or lw_kl.get(lw_key)
-
-                if si_entry:
-                    p1_full, p2_full, score, winner, round_name, _ = si_entry
-                    status = "completed" if winner else "upcoming"
-                    enriched += 1
-                else:
-                    p1_full    = _format_psa_name(p1_raw)
-                    p2_full    = _format_psa_name(p2_raw)
-                    score      = None
-                    winner     = None
-                    round_name = pm.get("round_name")
-                    status     = "upcoming"
+                p1 = pm["player1"]
+                p2 = pm["player2"]
 
                 raw_id = stable_hash({
                     "psa_url":  psa_url,
                     "division": division,
-                    "surnames": sorted([extract_surname(p1_raw), extract_surname(p2_raw)]),
+                    "surnames": sorted([extract_surname(p1), extract_surname(p2)]),
                 })
 
                 all_matches.append(Match(
-                    tournament     = best_title,
+                    tournament     = psa_title,
                     tournament_url = psa_url,
                     division       = division,
-                    round_name     = round_name,
-                    player1        = p1_full,
-                    player2        = p2_full,
-                    score          = score,
-                    winner         = winner,
-                    status         = status,
+                    round_name     = pm.get("round_name"),
+                    player1        = p1,
+                    player2        = p2,
+                    score          = None,
+                    winner         = None,
+                    status         = "upcoming",
                     match_time     = pm["match_time"],
                     source         = "psa",
                     raw_id         = raw_id,
                 ))
 
-        total     = sum(len(v) for v in data["divisions"].values())
-        kept      = len(all_matches)
-        tbd_skip  = total - kept
-        print(f"[enrich] '{best_title}': {kept}/{total} match(es) kept "
-              f"({tbd_skip} TBD-filtered), {enriched}/{kept} enriched with SquashInfo full names")
+        print(f"[enrich] '{psa_title}': {len(all_matches)} match(es) built")
 
         if all_matches:
             tournaments.append(Tournament(
-                title      = best_title,
-                url        = psa_url,
-                category   = infer_category(best_title),
-                start_date = start_date,
-                end_date   = end_date,
+                title        = psa_title,
+                url          = psa_url,
+                category     = infer_category(psa_title),
+                start_date   = start_date,
+                end_date     = end_date,
                 psa_location = location,
-                matches    = all_matches,
+                matches      = all_matches,
             ))
 
     tournaments.sort(key=lambda t: (t.start_date or "9999", t.title))

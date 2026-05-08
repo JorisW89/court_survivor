@@ -353,6 +353,8 @@ def _sync_match(db: Session, tournament: Tournament, m_data: dict, tz_name: Opti
         )
         db.add(existing)
 
+    existing.player1_id = p1.id
+    existing.player2_id = p2.id
     existing.score = m_data.get("score")
     existing.match_time = match_time
     existing.round_id = round_obj.id
@@ -393,7 +395,9 @@ def _update_round_deadlines(db: Session, tournament_id: int) -> None:
             r.status = "completed"
             timed = [m for m in all_matches if m.match_time]
             if timed:
-                r.first_match_time = min(m.match_time for m in timed)
+                def _as_utc(dt: datetime) -> datetime:
+                    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+                r.first_match_time = min(_as_utc(m.match_time) for m in timed)
                 r.pick_deadline = compute_pick_deadline(r.first_match_time)
             continue
 
@@ -405,8 +409,11 @@ def _update_round_deadlines(db: Session, tournament_id: int) -> None:
                 r.status = "open"
             continue
 
-        earliest = min(m.match_time for m in timed_matches)
-        latest = max(m.match_time for m in timed_matches)
+        def _as_utc(dt: datetime) -> datetime:
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+        earliest = min(_as_utc(m.match_time) for m in timed_matches)
+        latest = max(_as_utc(m.match_time) for m in timed_matches)
         r.first_match_time = earliest
         # Round deadline = 1 hour before the last match; round is locked only
         # when every match in the round is within 1 hour (no pick is possible).
@@ -515,9 +522,37 @@ def _dedupe_rankings(rankings: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Lis
 
 
 def _backfill_missing_ranking_snapshots(db: Session) -> None:
+    # Force-refresh snapshots for all upcoming/active tournaments so they always
+    # reflect the latest rankings (and latest player name formats).
+    upcoming = (
+        db.query(Tournament)
+        .filter(Tournament.status.in_(["upcoming", "active"]))
+        .all()
+    )
+    upcoming_ids = [t.id for t in upcoming]
+    if upcoming_ids:
+        db.execute(
+            text("DELETE FROM tournament_ranking_snapshots WHERE tournament_id = ANY(:ids)"),
+            {"ids": upcoming_ids},
+        )
+        db.commit()
+
+    seen = set()
+    for tournament in upcoming:
+        for division in ("Men", "Women"):
+            key = (tournament.id, division)
+            if key not in seen:
+                seen.add(key)
+                _ensure_ranking_snapshot(db, tournament.id, division)
+
+    # Also backfill any game tournaments that may have been missed.
     games = db.query(Game).all()
     for game in games:
-        _ensure_ranking_snapshot(db, game.tournament_id, game.division)
+        key = (game.tournament_id, game.division)
+        if key not in seen:
+            seen.add(key)
+            _ensure_ranking_snapshot(db, game.tournament_id, game.division)
+
     db.commit()
 
 
