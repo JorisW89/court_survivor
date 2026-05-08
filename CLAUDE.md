@@ -69,7 +69,7 @@ main.py              # Root-level PSA Playwright scraper (called by scraper_serv
 
 **Round statuses:** `upcoming` → `open` → `locked` → `completed`
 - Picks only accepted when round is `open`
-- `pick_deadline` = 23:59:59 UTC of day before first match in round
+- `pick_deadline` = 1 hour before the first match in round (`compute_pick_deadline` in `scraper_service.py`)
 
 **Datetime handling:** All datetimes stored in UTC with timezone info. Use `_utcnow()` from `models.py`, not `datetime.utcnow()` (deprecated). Never strip timezone info.
 

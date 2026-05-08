@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import GameCard from '../components/GameCard'
+import HowItWorks from '../components/HowItWorks'
 
 export default function Home() {
   const { user } = useAuth()
@@ -27,24 +28,25 @@ export default function Home() {
 
   return (
     <div>
-      {!user && (
+      {!user ? (
         <div className="card bg-gradient-to-br from-brand-600 to-brand-700 text-white mb-8 border-0">
-          <div className="max-w-lg">
-            <h1 className="text-2xl font-bold mb-2">Court Survivor</h1>
-            <p className="text-brand-100 mb-4">
-              Pick one player per round. Correct picks build a streak, upsets add ranking bonuses,
-              and you can never pick the same player twice.
-            </p>
-            <div className="flex gap-3">
-              <Link to="/register" className="bg-white text-brand-600 font-semibold px-4 py-2 rounded-lg hover:bg-brand-50 transition-colors text-sm">
-                Get started
-              </Link>
-              <Link to="/login" className="text-white border border-white/30 font-medium px-4 py-2 rounded-lg hover:bg-white/10 transition-colors text-sm">
-                Sign in
-              </Link>
-            </div>
+          <h1 className="text-2xl font-bold mb-2">Court Survivor</h1>
+          <p className="text-brand-100">
+            Pick one squash player per round, build a streak, and earn bonus points for upsets.
+            One wrong pick and your streak resets.
+          </p>
+          <HowItWorks />
+          <div className="flex gap-3 mt-6">
+            <Link to="/register" className="bg-white text-brand-600 font-semibold px-4 py-2 rounded-lg hover:bg-brand-50 transition-colors text-sm">
+              Get started
+            </Link>
+            <Link to="/login" className="text-white border border-white/30 font-medium px-4 py-2 rounded-lg hover:bg-white/10 transition-colors text-sm">
+              Sign in
+            </Link>
           </div>
         </div>
+      ) : (
+        <HowItWorks collapsible />
       )}
 
       <div className="flex items-center justify-between mb-5">
