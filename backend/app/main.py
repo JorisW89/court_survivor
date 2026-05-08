@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,10 +42,11 @@ async def _scraper_loop() -> None:
             finally:
                 db.close()
 
-    # Regular daily schedule at 06:00 UTC.
+    # Regular daily schedule at 04:00 Amsterdam time (handles DST automatically).
+    AMS = ZoneInfo("Europe/Amsterdam")
     while True:
-        now = datetime.now(timezone.utc)
-        next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        now = datetime.now(AMS)
+        next_run = now.replace(hour=4, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
         wait_seconds = (next_run - now).total_seconds()
