@@ -7,12 +7,12 @@ Full player names and rankings are extracted directly from the H2H data-attribut
 baked into the draw page DOM. No secondary source needed.
 
 Usage:
-    python main.py
-    python main.py --json
-    python main.py --days 14
-    python main.py --today 2026-05-08
-    python main.py --debug
-    python main.py --include-tbd
+    python psa_scraper.py
+    python psa_scraper.py --json
+    python psa_scraper.py --days 14
+    python psa_scraper.py --today 2026-05-08
+    python psa_scraper.py --debug
+    python psa_scraper.py --include-tbd
 """
 
 from __future__ import annotations

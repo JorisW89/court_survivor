@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..models import Game, Match, Player, Ranking, Round, Tournament, TournamentRankingSnapshot
 from ..player_utils import normalize_player_name
 
-ROOT_DIR = Path(__file__).parent.parent.parent.parent
+ROOT_DIR = Path(__file__).parent.parent.parent
 
 # ── Location → IANA timezone mapping ─────────────────────────────────────────
 # PSA listing provides "City, CountryCode" (ISO 3166-1 alpha-2, except "EN" for England).
@@ -575,7 +575,7 @@ def _backfill_missing_ranking_snapshots(db: Session) -> None:
 async def run_scraper_and_sync(db: Session) -> None:
     import sys
     sys.path.insert(0, str(ROOT_DIR))
-    from main import fetch_tournaments, get_reference_date
+    from psa_scraper import fetch_tournaments, get_reference_date
     from dataclasses import asdict
 
     print("[scraper] Starting scraper...")
