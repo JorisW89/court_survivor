@@ -352,6 +352,16 @@ def _sync_match(db: Session, tournament: Tournament, m_data: dict, tz_name: Opti
             psa_raw_id=raw_id,
         )
         db.add(existing)
+        db.flush()
+
+    # Migrate picks if player IDs changed (e.g. abbreviated → full name player records)
+    from ..models import Pick
+    for old_id, new_id in ((existing.player1_id, p1.id), (existing.player2_id, p2.id)):
+        if old_id and old_id != new_id:
+            db.query(Pick).filter(
+                Pick.round_id == round_obj.id,
+                Pick.player_id == old_id,
+            ).update({"player_id": new_id}, synchronize_session=False)
 
     existing.player1_id = p1.id
     existing.player2_id = p2.id
