@@ -189,6 +189,8 @@ _PSA_H2H_EXTRACT_JS = """() => {
         container.querySelectorAll('a.show-head-to-head-modal[data-player1-name]').forEach(btn => {
             const p1 = btn.dataset.player1Name;
             const p2 = btn.dataset.player2Name;
+            const p1Id = btn.dataset.player1;
+            const p2Id = btn.dataset.player2;
             if (!p1 || !p2) return;
 
             const matchDetails = btn.closest('.match-details');
@@ -200,6 +202,32 @@ _PSA_H2H_EXTRACT_JS = """() => {
             const roundEl = roundDiv ? roundDiv.querySelector('.round-heading') : null;
             const roundText = roundEl ? normalizeRound(roundEl.textContent) : null;
 
+            // Extract games won from the first .match-player-result in each player's div.
+            // The PSA draw shows games won as the first result entry (e.g. 3 and 1 for 3-1).
+            // Upcoming/TBD matches show 0 for both — skip those.
+            let score = null;
+            let winner = null;
+            const matchDiv = btn.closest('.match');
+            if (matchDiv && p1Id && p2Id) {
+                const p1El = matchDiv.querySelector('.player-' + p1Id);
+                const p2El = matchDiv.querySelector('.player-' + p2Id);
+                if (p1El && p2El) {
+                    const getGames = el => {
+                        const r = el.querySelector('.match-player-result');
+                        if (!r) return null;
+                        const n = parseInt(r.textContent.trim(), 10);
+                        return isNaN(n) ? null : n;
+                    };
+                    const g1 = getGames(p1El);
+                    const g2 = getGames(p2El);
+                    if (g1 !== null && g2 !== null && (g1 > 0 || g2 > 0)) {
+                        score = g1 + '-' + g2;
+                        if (g1 > g2) winner = p1;
+                        else if (g2 > g1) winner = p2;
+                    }
+                }
+            }
+
             matches.push({
                 player1:         p1,
                 player1_ranking: btn.dataset.player1Ranking || null,
@@ -209,6 +237,8 @@ _PSA_H2H_EXTRACT_JS = """() => {
                 player2_country: btn.dataset.player2Country || null,
                 match_time:      timeText,
                 round_name:      roundText,
+                score:           score,
+                winner:          winner,
             });
         });
         return matches;
@@ -465,9 +495,9 @@ async def fetch_tournaments(
                     round_name     = pm.get("round_name"),
                     player1        = p1,
                     player2        = p2,
-                    score          = None,
-                    winner         = None,
-                    status         = "upcoming",
+                    score          = pm.get("score"),
+                    winner         = pm.get("winner"),
+                    status         = "completed" if pm.get("winner") else "upcoming",
                     match_time     = pm["match_time"],
                     source         = "psa",
                     raw_id         = raw_id,
