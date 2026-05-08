@@ -183,17 +183,20 @@ def get_group_leaderboard(
 
         entries = []
         rank = 1
+        prev_points = None
         for p in participants:
             user = db.get(User, p.user_id)
             if not user:
                 continue
+            if prev_points is not None and p.total_points < prev_points:
+                rank = len(entries) + 1
+            prev_points = p.total_points
             entries.append(LeaderboardEntry(
                 rank=rank,
                 user_id=p.user_id,
                 username=user.username,
                 total_points=p.total_points,
             ))
-            rank += 1
 
         result.append(GroupLeaderboardEntry(
             game_id=game.id,

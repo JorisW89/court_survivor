@@ -200,7 +200,7 @@ function MatchCard({ match, selectedPlayerId, onSelect, roundLocked, now }) {
       </div>
       {locked && !roundLocked && (
         <p className="text-xs text-amber-600 pl-1">
-          {match.is_finished ? 'Locked — match has finished' : 'Locked — match starts within 1 hour'}
+          Locked
         </p>
       )}
     </div>
@@ -235,6 +235,203 @@ function PickPointsPreview({ player }) {
           <p className="text-gray-500">Bonus</p>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Future round — collapsible pick section ───────────────────────────────
+
+function FutureRoundPickSection({ gameId, round, now, existingPick }) {
+  const [open, setOpen] = useState(false)
+  const [roundData, setRoundData] = useState(null)
+  const [selectedPlayer, setSelectedPlayer] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [resetting, setResetting] = useState(false)
+  const [error, setError] = useState('')
+  const [successMsg, setSuccessMsg] = useState('')
+  const [dataLoaded, setDataLoaded] = useState(false)
+
+  async function loadData() {
+    if (dataLoaded) return
+    try {
+      const r = await api.get(`/games/${gameId}/rounds/${round.round_id}/players`)
+      setRoundData(r.data)
+      setSelectedPlayer(r.data.my_pick || null)
+    } catch {
+      // ignore
+    }
+    setDataLoaded(true)
+  }
+
+  function handleToggle() {
+    if (!open && !dataLoaded) loadData()
+    setOpen(o => !o)
+  }
+
+  function isMatchLockedLocal(match) {
+    const deadline = getMatchPickDeadline(match.match_time)
+    return Boolean(match.is_locked || match.is_finished || (deadline && now >= deadline))
+  }
+
+  const alreadyPickedPlayerId = roundData?.my_pick ?? existingPick?.player_id ?? null
+  const selectedMatchRef = selectedPlayer != null && roundData?.matches?.find(
+    m => m.player1.id === selectedPlayer || m.player2.id === selectedPlayer
+  )
+  const selectedMatchIsLocked = selectedMatchRef ? isMatchLockedLocal(selectedMatchRef) : false
+  const selectedPickChanged = Boolean(
+    selectedPlayer && (!alreadyPickedPlayerId || selectedPlayer !== alreadyPickedPlayerId)
+  )
+  const currentPickMatch = alreadyPickedPlayerId && roundData?.matches?.find(
+    m => m.player1.id === alreadyPickedPlayerId || m.player2.id === alreadyPickedPlayerId
+  )
+  const currentPickCanReset = Boolean(
+    round.status === 'open' &&
+    alreadyPickedPlayerId &&
+    currentPickMatch &&
+    !isMatchLockedLocal(currentPickMatch)
+  )
+  const selectedPlayerDetail = roundData?.matches
+    ?.flatMap(m => [m.player1, m.player2])
+    ?.find(p => p.id === selectedPlayer)
+
+  async function handleSubmitPick() {
+    if (!selectedPlayer) return
+    setSubmitting(true)
+    setError('')
+    try {
+      await api.post('/picks', {
+        game_id: gameId,
+        round_id: round.round_id,
+        player_id: selectedPlayer,
+      })
+      setSuccessMsg('Pick saved!')
+      setTimeout(() => setSuccessMsg(''), 3000)
+      const r = await api.get(`/games/${gameId}/rounds/${round.round_id}/players`)
+      setRoundData(r.data)
+      setSelectedPlayer(r.data.my_pick || null)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to submit pick')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleResetPick() {
+    if (!alreadyPickedPlayerId) return
+    setResetting(true)
+    setError('')
+    try {
+      await api.delete(`/picks/${gameId}/${round.round_id}`)
+      setSelectedPlayer(null)
+      setSuccessMsg('Pick reset.')
+      setTimeout(() => setSuccessMsg(''), 3000)
+      const r = await api.get(`/games/${gameId}/rounds/${round.round_id}/players`)
+      setRoundData(r.data)
+      setSelectedPlayer(r.data.my_pick || null)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to reset pick')
+    } finally {
+      setResetting(false)
+    }
+  }
+
+  return (
+    <div className="card p-0 overflow-hidden">
+      <button
+        type="button"
+        onClick={handleToggle}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors text-left"
+      >
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-gray-900 text-sm">{round.round_name}</span>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+            round.status === 'open' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'
+          }`}>{round.status}</span>
+          <span className="text-xs text-gray-400 italic">partial draw</span>
+        </div>
+        <div className="flex items-center gap-3">
+          {existingPick
+            ? <span className="text-xs text-brand-600 font-medium">✓ {existingPick.player_name}</span>
+            : <span className="text-xs text-gray-400">No pick yet</span>
+          }
+          <span className="text-xs text-gray-400">{open ? '▲' : '▼'}</span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 border-t border-gray-50">
+          <p className="text-xs text-gray-400 pt-3 pb-3">
+            Not all matches for this round are known yet — more will appear as the current round progresses.
+            Each match locks 1 hour before it starts.
+          </p>
+
+          {!dataLoaded ? (
+            <div className="flex justify-center py-4">
+              <div className="animate-spin w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full" />
+            </div>
+          ) : roundData?.matches?.length > 0 ? (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-500 mb-1">
+                {alreadyPickedPlayerId
+                  ? 'Your current pick is highlighted. Tap another player to change it.'
+                  : 'Pick one player from the available matches.'}
+              </p>
+              {roundData.matches.map(match => (
+                <MatchCard
+                  key={match.match_id}
+                  match={match}
+                  selectedPlayerId={selectedPlayer}
+                  onSelect={setSelectedPlayer}
+                  roundLocked={false}
+                  now={now}
+                />
+              ))}
+              <div className="pt-2 space-y-2">
+                <PickPointsPreview player={selectedPlayerDetail} />
+                {error && <p className="text-sm text-red-600">{error}</p>}
+                {successMsg && <p className="text-sm text-emerald-600">{successMsg}</p>}
+                {selectedMatchIsLocked && (
+                  <p className="text-sm text-amber-600">
+                    {alreadyPickedPlayerId && !selectedPickChanged
+                      ? "This match has already started — your pick is final and can no longer be changed."
+                      : "This match has already started. Pick a player from a different match."}
+                  </p>
+                )}
+                <button
+                  onClick={handleSubmitPick}
+                  disabled={!selectedPickChanged || submitting || resetting || selectedMatchIsLocked}
+                  className="btn-primary w-full"
+                >
+                  {submitting
+                    ? 'Saving…'
+                    : alreadyPickedPlayerId && !selectedPickChanged
+                    ? 'Pick saved'
+                    : alreadyPickedPlayerId
+                    ? 'Update pick'
+                    : 'Confirm pick'}
+                </button>
+                {alreadyPickedPlayerId && (
+                  <button
+                    type="button"
+                    onClick={handleResetPick}
+                    disabled={!currentPickCanReset || submitting || resetting}
+                    className="btn-secondary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {resetting ? 'Resetting…' : 'Reset pick'}
+                  </button>
+                )}
+                {alreadyPickedPlayerId && !currentPickCanReset && (
+                  <p className="text-xs text-gray-400">
+                    Reset is available until 1 hour before your picked match starts.
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">No matches available yet for this round.</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -469,6 +666,17 @@ export default function GameDetail() {
     ?.flatMap(m => [m.player1, m.player2])
     ?.find(p => p.id === selectedPlayer)
 
+  const futurePickableRounds = (drawData?.rounds ?? [])
+    .filter(r =>
+      r.matches?.length > 0 &&
+      r.round_id !== currentRound?.id &&
+      r.round_order > (currentRound?.round_order ?? -1) &&
+      ['open', 'upcoming'].includes(r.status)
+    )
+    .sort((a, b) => a.round_order - b.round_order)
+
+  const futurePickableRoundIds = new Set(futurePickableRounds.map(r => r.round_id))
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -552,7 +760,11 @@ export default function GameDetail() {
                   {error    && <p className="text-sm text-red-600">{error}</p>}
                   {successMsg && <p className="text-sm text-emerald-600">{successMsg}</p>}
                   {selectedMatchIsLocked && (
-                    <p className="text-sm text-amber-600">This match has already locked. Pick a different match.</p>
+                    <p className="text-sm text-amber-600">
+                      {alreadyPickedThisRound && !selectedPickChanged
+                        ? "This match has already started — your pick is final and can no longer be changed."
+                        : "This match has already started. Pick a player from a different match."}
+                    </p>
                   )}
                   <button
                     onClick={handleSubmitPick}
@@ -595,6 +807,22 @@ export default function GameDetail() {
         </div>
       )}
 
+      {/* Future rounds with partial draws — collapsible pick sections */}
+      {user && futurePickableRounds.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium px-1">Upcoming rounds</p>
+          {futurePickableRounds.map(round => (
+            <FutureRoundPickSection
+              key={round.round_id}
+              gameId={game.id}
+              round={round}
+              now={now}
+              existingPick={myP?.my_picks?.find(p => p.round_id === round.round_id)}
+            />
+          ))}
+        </div>
+      )}
+
       {/* Pick history */}
       {myP?.my_picks?.length > 0 && (
         <div className="card">
@@ -607,13 +835,13 @@ export default function GameDetail() {
         </div>
       )}
 
-      {/* Full draw — all rounds except the current pick round (already shown above) */}
-      {drawData?.rounds?.some(r => r.matches?.length > 0 && r.round_id !== currentRound?.id) && (
+      {/* Full draw — all rounds except current and future pickable (already shown above) */}
+      {drawData?.rounds?.some(r => r.matches?.length > 0 && r.round_id !== currentRound?.id && !futurePickableRoundIds.has(r.round_id)) && (
         <div className="card">
           <h2 className="font-semibold text-gray-900 mb-3">Full Draw</h2>
           <div className="space-y-2">
             {drawData.rounds
-              .filter(r => r.matches?.length > 0 && r.round_id !== currentRound?.id)
+              .filter(r => r.matches?.length > 0 && r.round_id !== currentRound?.id && !futurePickableRoundIds.has(r.round_id))
               .sort((a, b) => a.round_order - b.round_order)
               .map(r =>
                 r.status === 'completed'

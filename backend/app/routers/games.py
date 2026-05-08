@@ -286,17 +286,20 @@ def get_leaderboard(
 
     entries = []
     rank = 1
-    for p in participants:
+    prev_points = None
+    for i, p in enumerate(participants):
         user = db.get(User, p.user_id)
         if not user:
             continue
+        if prev_points is not None and p.total_points < prev_points:
+            rank = len(entries) + 1
+        prev_points = p.total_points
         entries.append(LeaderboardEntry(
             rank=rank,
             user_id=p.user_id,
             username=user.username,
             total_points=p.total_points,
         ))
-        rank += 1
 
     my_rank = None
     if current_user:
