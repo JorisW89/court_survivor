@@ -122,21 +122,28 @@ def get_or_create_participant(db: Session, game_id: int, user_id: int) -> GamePa
 
 
 def evaluate_round(db: Session, round_obj: Round) -> None:
-    """Evaluate all picks for a completed round."""
+    """Evaluate picks for a round — scores each pick as soon as its match has a result."""
     matches = db.query(Match).filter(Match.round_id == round_obj.id).all()
-    if not all(m.winner_id for m in matches):
-        return  # Not all results in yet
+
+    player_match: dict[int, Match] = {}
+    for m in matches:
+        if m.player1_id:
+            player_match[m.player1_id] = m
+        if m.player2_id:
+            player_match[m.player2_id] = m
 
     picks = db.query(Pick).filter(
         Pick.round_id == round_obj.id,
         Pick.is_correct.is_(None),
     ).all()
 
-    winner_ids = {m.winner_id for m in matches}
-
     for pick in picks:
+        match = player_match.get(pick.player_id)
+        if not match or match.winner_id is None:
+            continue  # result not in yet
+
         participant = get_or_create_participant(db, pick.game_id, pick.user_id)
-        if pick.player_id in winner_ids:
+        if pick.player_id == match.winner_id:
             pick.is_correct = True
             streak_points = get_current_streak(db, pick.game_id, pick.user_id, before_round=round_obj) + 1
             _, ranking_bonus, _, _ = get_pick_points_breakdown(db, pick)
@@ -171,7 +178,7 @@ def recalculate_game_scores(db: Session, game_id: int) -> None:
         .filter(
             Round.tournament_id == game.tournament_id,
             Round.division == game.division,
-            Round.status == "completed",
+            Round.status != "upcoming",
         )
         .order_by(Round.round_order)
         .all()
@@ -180,20 +187,32 @@ def recalculate_game_scores(db: Session, game_id: int) -> None:
     streaks: dict[int, int] = {participant.user_id: 0 for participant in participants}
     for round_obj in rounds:
         matches = db.query(Match).filter(Match.round_id == round_obj.id).all()
-        if not matches or not all(m.winner_id for m in matches):
+        if not matches:
             continue
 
-        winner_ids = {m.winner_id for m in matches}
+        player_match: dict[int, Match] = {}
+        for m in matches:
+            if m.player1_id:
+                player_match[m.player1_id] = m
+            if m.player2_id:
+                player_match[m.player2_id] = m
+
         picks = db.query(Pick).filter(Pick.game_id == game_id, Pick.round_id == round_obj.id).all()
         picks_by_user = {pick.user_id: pick for pick in picks}
 
         for participant in participants:
             pick = picks_by_user.get(participant.user_id)
             if not pick:
-                streaks[participant.user_id] = 0
+                # Only reset streak for missing picks once the round is fully done
+                if round_obj.status == "completed":
+                    streaks[participant.user_id] = 0
                 continue
 
-            if pick.player_id in winner_ids:
+            match = player_match.get(pick.player_id)
+            if not match or match.winner_id is None:
+                continue  # result not in yet
+
+            if pick.player_id == match.winner_id:
                 streaks[participant.user_id] = streaks.get(participant.user_id, 0) + 1
                 pick.is_correct = True
                 _, ranking_bonus, _, _ = get_pick_points_breakdown(db, pick)
@@ -217,15 +236,17 @@ def _reset_non_pickers(db: Session, round_obj: Round) -> None:
 
 
 def evaluate_all_completed_rounds(db: Session) -> None:
-    """Called after each scraper sync to evaluate any newly completed rounds."""
-    completed_rounds = db.query(Round).filter(Round.status == "completed").all()
-    for r in completed_rounds:
-        unevaluated = db.query(Pick).filter(
-            Pick.round_id == r.id,
-            Pick.is_correct.is_(None),
-        ).count()
-        if unevaluated > 0:
-            evaluate_round(db, r)
+    """Called after each scraper sync to evaluate any picks whose match result is now in."""
+    rounds_with_unevaluated = (
+        db.query(Round)
+        .join(Pick, Pick.round_id == Round.id)
+        .filter(Pick.is_correct.is_(None))
+        .distinct()
+        .all()
+    )
+
+    for r in rounds_with_unevaluated:
+        evaluate_round(db, r)
 
     db.commit()
     recalculate_all_scores(db)
