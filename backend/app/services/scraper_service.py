@@ -424,6 +424,12 @@ def _update_round_deadlines(db: Session, tournament_id: int) -> None:
 
         earliest = min(_as_utc(m.match_time) for m in timed_matches)
         latest = max(_as_utc(m.match_time) for m in timed_matches)
+
+        # Matches with both players set but no parseable time (e.g. "Follow On")
+        # inherit the round's earliest match time so they get a proper deadline.
+        for m in all_matches:
+            if m.match_time is None and m.player1_id is not None and m.player2_id is not None:
+                m.match_time = earliest
         r.first_match_time = earliest
         # Round deadline = 1 hour before the last match; round is locked only
         # when every match in the round is within 1 hour (no pick is possible).

@@ -10,7 +10,7 @@ Squash survivor game: users pick one player per tournament round. Correct pick �
 | Frontend | React 18 + Vite + Tailwind CSS + Axios |
 | Auth | JWT (python-jose, HS256, 7-day expiry) + bcrypt |
 | Scraper | Playwright (Chromium) + BeautifulSoup → PSA squash tour website |
-| Deploy | Render.com (`render.yaml`): FastAPI service + static React service |
+| Deploy | Render.com: separate Web Service (FastAPI) + Static Site (React), configured manually in dashboard |
 
 ## Running locally
 ```bash
@@ -84,6 +84,24 @@ alembic upgrade head
 ```
 Never edit migration files retroactively if already applied in prod.
 
+## Deployment (Render.com)
+Two manually configured services in the Render dashboard — no blueprint file drives this.
+
+**Web Service (FastAPI backend):**
+- Root directory: `backend`
+- Build: `pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/pw-browsers python -m playwright install chromium --only-shell`
+- Start: `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Environment variables set in dashboard (see list below)
+
+**Static Site (React frontend):**
+- Root directory: `frontend`
+- Build: `npm ci && npm run build`
+- Publish directory: `dist`
+- Rewrite rule: `/* → /index.html` (SPA)
+- `VITE_API_BASE_URL` set in dashboard
+
+> Note: `render.yaml` exists in the repo but is **not used** — config lives in the Render dashboard.
+
 ## Environment variables
 ```
 DATABASE_URL          sqlite:///./court_survivor.db  (prod: postgresql://...)
@@ -92,7 +110,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES  10080 (7 days)
 ENV                   development | production  (affects scraper scheduling)
 CORS_ORIGINS          comma-separated allowed origins
 ADMIN_SECRET          header secret for /api/admin/scrape
-VITE_API_BASE_URL     /api  (frontend, must be set in Render static env)
+VITE_API_BASE_URL     /api  (set in Render static site env)
 PLAYWRIGHT_BROWSERS_PATH   (prod only: /opt/render/project/pw-browsers)
 ```
 

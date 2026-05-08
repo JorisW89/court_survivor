@@ -24,7 +24,7 @@ if ! python -c "from pathlib import Path; from playwright.sync_api import sync_p
 fi
 
 echo "Running database migrations..."
-alembic -c backend/alembic.ini upgrade head
+(cd backend && alembic upgrade head)
 
 # Frontend
 if [ ! -d "frontend/node_modules" ]; then
@@ -38,6 +38,16 @@ if [ ! -f ".env" ]; then
     echo -e "${YELLOW}Created .env from .env.example — edit it to set a real SECRET_KEY.${NC}"
 fi
 
+# Free ports if already in use
+for port in 8000 3000; do
+    pids=$(lsof -ti tcp:$port 2>/dev/null) || true
+    if [ -n "$pids" ]; then
+        echo "Freeing port $port (PIDs: $pids)..."
+        echo $pids | xargs kill -9 2>/dev/null || true
+        sleep 2
+    fi
+done
+
 echo -e "${GREEN}Starting servers...${NC}"
 echo "  Backend:  http://localhost:8000"
 echo "  Frontend: http://localhost:3000"
@@ -49,7 +59,7 @@ echo ""
 # Kill background jobs on exit
 trap 'echo ""; echo "Stopping..."; kill $(jobs -p) 2>/dev/null; exit 0' INT TERM EXIT
 
-ENV=development uvicorn backend.app.main:app --reload --port 8000 &
+(cd backend && ENV=development uvicorn app.main:app --reload --port 8000) &
 cd frontend && npm run dev &
 
 wait

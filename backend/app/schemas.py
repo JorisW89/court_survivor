@@ -214,6 +214,34 @@ class MemberPicksResponse(BaseModel):
     games: list[MemberPicksForGame]
 
 
+# --- Profile ---
+
+class ProfileGameEntry(BaseModel):
+    game_id: int
+    tournament_title: str
+    division: str
+    game_status: str
+    total_points: int
+    rank: Optional[int]
+    participants: int
+    picks_made: int
+    correct_picks: int
+
+
+class ProfileStats(BaseModel):
+    username: str
+    member_since: datetime
+    games_played: int
+    total_points: int
+    avg_points_per_game: float
+    total_picks: int
+    correct_picks: int
+    pick_accuracy: float
+    avg_rank: Optional[float]
+    most_picked_player: Optional[str]
+    games: list[ProfileGameEntry]
+
+
 # --- Draw / Round results ---
 
 class MatchResult(BaseModel):

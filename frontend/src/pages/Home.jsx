@@ -49,11 +49,6 @@ export default function Home() {
 
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-lg font-semibold text-gray-900">Active Tournaments</h2>
-        {user && games.length > 0 && (
-          <Link to="/groups" className="text-sm text-brand-600 font-medium hover:underline">
-            My groups →
-          </Link>
-        )}
       </div>
 
       {error && (

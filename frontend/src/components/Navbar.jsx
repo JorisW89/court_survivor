@@ -45,6 +45,14 @@ export default function Navbar() {
                 >
                   Groups
                 </Link>
+                <Link
+                  to="/profile"
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    isActive('/profile') ? 'bg-brand-50 text-brand-600' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  }`}
+                >
+                  Profile
+                </Link>
                 <div className="ml-2 flex items-center gap-2">
                   <span className="text-sm text-gray-500">{user.username}</span>
                   <button
@@ -95,6 +103,17 @@ export default function Navbar() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
                 Groups
+              </Link>
+              <Link
+                to="/profile"
+                className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-3 text-xs font-medium transition-colors ${
+                  isActive('/profile') ? 'text-brand-600' : 'text-gray-500'
+                }`}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+                Profile
               </Link>
               <button
                 onClick={handleLogout}

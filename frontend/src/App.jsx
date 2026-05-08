@@ -8,6 +8,7 @@ import GameDetail from './pages/GameDetail'
 import GameLeaderboard from './pages/GameLeaderboard'
 import Groups from './pages/Groups'
 import GroupDetail from './pages/GroupDetail'
+import Profile from './pages/Profile'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
             <Route path="games/:id/leaderboard" element={<GameLeaderboard />} />
             <Route path="groups" element={<Groups />} />
             <Route path="groups/:id" element={<GroupDetail />} />
+            <Route path="profile" element={<Profile />} />
           </Route>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
