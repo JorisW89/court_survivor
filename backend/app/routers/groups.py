@@ -67,7 +67,11 @@ def list_my_groups(
 
 
 @router.get("/join/{invite_code}", response_model=GroupResponse)
-def get_group_by_invite(invite_code: str, db: Session = Depends(get_db)):
+def get_group_by_invite(
+    invite_code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     group = db.query(Group).filter(Group.invite_code == invite_code).first()
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")

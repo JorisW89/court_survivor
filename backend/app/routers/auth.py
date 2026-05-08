@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from ..auth import create_access_token, hash_password, verify_password, get_current_user
@@ -7,10 +9,12 @@ from ..models import User
 from ..schemas import Token, UserCreate, UserLogin, UserResponse
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/register", response_model=Token)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def register(request: Request, payload: UserCreate, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
     if db.query(User).filter(User.username == payload.username).first():
@@ -35,7 +39,8 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-def login(payload: UserLogin, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def login(request: Request, payload: UserLogin, db: Session = Depends(get_db)):
     user = (
         db.query(User).filter(User.email == payload.identifier).first()
         or db.query(User).filter(User.username == payload.identifier).first()

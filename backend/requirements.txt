@@ -12,3 +12,4 @@ beautifulsoup4>=4.12.0
 requests>=2.31.0
 playwright>=1.40.0
 psycopg2-binary>=2.9.9
+slowapi>=0.1.9

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
 from typing import Optional
 
@@ -7,13 +7,13 @@ from typing import Optional
 
 class UserCreate(BaseModel):
     email: EmailStr
-    username: str
-    password: str
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=8, max_length=72)
 
 
 class UserLogin(BaseModel):
-    identifier: str  # email or username
-    password: str
+    identifier: str = Field(max_length=254)
+    password: str = Field(max_length=72)
 
 
 class UserResponse(BaseModel):
@@ -159,7 +159,7 @@ class LeaderboardResponse(BaseModel):
 # --- Group ---
 
 class GroupCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=100)
 
 
 class GroupMemberResponse(BaseModel):
