@@ -1,7 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,7 +34,7 @@ async def _scraper_loop() -> None:
     if last_synced is not None:
         if last_synced.tzinfo is None:
             last_synced = last_synced.replace(tzinfo=timezone.utc)
-        if (datetime.now(timezone.utc) - last_synced) > timedelta(hours=24):
+        if (datetime.now(timezone.utc) - last_synced) > timedelta(hours=4):
             print(f"[scheduler] Last sync was {last_synced.isoformat()}, running catch-up scrape now")
             db = SessionLocal()
             try:
@@ -45,14 +44,10 @@ async def _scraper_loop() -> None:
             finally:
                 db.close()
 
-    # Regular daily schedule at 04:00 Amsterdam time (handles DST automatically).
-    AMS = ZoneInfo("Europe/Amsterdam")
+    # Run every 4 hours.
     while True:
-        now = datetime.now(AMS)
-        next_run = now.replace(hour=4, minute=0, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        wait_seconds = (next_run - now).total_seconds()
+        next_run = datetime.now(timezone.utc) + timedelta(hours=4)
+        wait_seconds = timedelta(hours=4).total_seconds()
         print(f"[scheduler] Next scrape at {next_run.isoformat()} (in {wait_seconds:.0f}s)")
         await asyncio.sleep(wait_seconds)
 
