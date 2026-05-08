@@ -3,7 +3,93 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
-function LeaderboardTable({ entries, currentUserId }) {
+function MemberPicksModal({ userId, username, groupId, onClose }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.get(`/groups/${groupId}/members/${userId}/picks`)
+      .then(r => setData(r.data))
+      .finally(() => setLoading(false))
+  }, [userId, groupId])
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 sticky top-0 bg-white rounded-t-2xl">
+          <h2 className="font-semibold text-gray-900">{username}'s picks</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {loading && (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full" />
+            </div>
+          )}
+
+          {!loading && data && data.games.length === 0 && (
+            <p className="text-sm text-gray-400 text-center py-6">No completed rounds yet.</p>
+          )}
+
+          {!loading && data && data.games.map(game => (
+            <div key={game.game_id}>
+              <div className="mb-2">
+                <p className="font-medium text-gray-800 text-sm leading-snug">{game.tournament_title}</p>
+                <p className="text-xs text-gray-400">{game.division}'s Draw</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">Round</th>
+                      <th className="text-left py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">Pick</th>
+                      <th className="text-right py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">Result</th>
+                      <th className="text-right py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">Pts</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {game.picks.map(pick => (
+                      <tr key={pick.round_id}>
+                        <td className="py-2 text-gray-500 text-xs whitespace-nowrap">{pick.round_name}</td>
+                        <td className="py-2 font-medium text-gray-800">{pick.player_name}</td>
+                        <td className="py-2 text-right">
+                          {pick.is_correct === true && (
+                            <span className="inline-block text-xs font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded">Win</span>
+                          )}
+                          {pick.is_correct === false && (
+                            <span className="inline-block text-xs font-medium text-red-600 bg-red-50 px-1.5 py-0.5 rounded">Out</span>
+                          )}
+                          {pick.is_correct === null && (
+                            <span className="inline-block text-xs text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-2 text-right font-semibold text-gray-900">{pick.points_awarded}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LeaderboardTable({ entries, currentUserId, onMemberClick }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -17,7 +103,11 @@ function LeaderboardTable({ entries, currentUserId }) {
         </thead>
         <tbody className="divide-y divide-gray-50">
           {entries.map(entry => (
-            <tr key={entry.user_id} className={entry.user_id === currentUserId ? 'bg-brand-50' : ''}>
+            <tr
+              key={entry.user_id}
+              className={`cursor-pointer hover:bg-gray-50 transition-colors ${entry.user_id === currentUserId ? 'bg-brand-50 hover:bg-brand-50' : ''}`}
+              onClick={() => onMemberClick(entry.user_id, entry.username)}
+            >
               <td className="py-2.5 text-gray-400">{entry.rank}</td>
               <td className="py-2.5">
                 <span className={`font-medium ${entry.user_id === currentUserId ? 'text-brand-700' : 'text-gray-800'}`}>
@@ -51,6 +141,7 @@ export default function GroupDetail() {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [leaving, setLeaving] = useState(false)
+  const [selectedMember, setSelectedMember] = useState(null) // { userId, username }
 
   useEffect(() => {
     Promise.all([
@@ -82,6 +173,10 @@ export default function GroupDetail() {
     }
   }
 
+  function openMemberPicks(userId, username) {
+    setSelectedMember({ userId, username })
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24">
@@ -94,6 +189,15 @@ export default function GroupDetail() {
 
   return (
     <div className="space-y-6">
+      {selectedMember && (
+        <MemberPicksModal
+          userId={selectedMember.userId}
+          username={selectedMember.username}
+          groupId={id}
+          onClose={() => setSelectedMember(null)}
+        />
+      )}
+
       <div>
         <Link to="/groups" className="text-sm text-gray-400 hover:text-gray-600 mb-2 inline-block">← Groups</Link>
         <div className="flex items-start justify-between gap-4">
@@ -144,7 +248,11 @@ export default function GroupDetail() {
                 View game →
               </Link>
             </div>
-            <LeaderboardTable entries={item.entries} currentUserId={user?.id} />
+            <LeaderboardTable
+              entries={item.entries}
+              currentUserId={user?.id}
+              onMemberClick={openMemberPicks}
+            />
           </div>
         ))
       )}
@@ -155,10 +263,13 @@ export default function GroupDetail() {
         <div className="space-y-2">
           {group.members.map(m => (
             <div key={m.user_id} className="flex items-center justify-between text-sm">
-              <span className={m.user_id === user?.id ? 'font-medium text-brand-700' : 'text-gray-700'}>
+              <button
+                onClick={() => openMemberPicks(m.user_id, m.username)}
+                className={`text-left hover:underline ${m.user_id === user?.id ? 'font-medium text-brand-700' : 'text-gray-700'}`}
+              >
                 {m.username}
                 {m.user_id === group.created_by && <span className="text-xs text-gray-400 ml-1">· admin</span>}
-              </span>
+              </button>
             </div>
           ))}
         </div>

@@ -199,6 +199,21 @@ class GroupLeaderboardEntry(BaseModel):
     entries: list[LeaderboardEntry]
 
 
+# --- Member picks ---
+
+class MemberPicksForGame(BaseModel):
+    game_id: int
+    tournament_title: str
+    division: str
+    picks: list[PickSummary]
+
+
+class MemberPicksResponse(BaseModel):
+    user_id: int
+    username: str
+    games: list[MemberPicksForGame]
+
+
 # --- Draw / Round results ---
 
 class MatchResult(BaseModel):

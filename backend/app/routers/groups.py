@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Game, GameParticipant, Group, GroupMember, Round, Tournament, User
+from ..models import Game, GameParticipant, Group, GroupMember, Pick, Player, Round, Tournament, User
+from ..models import Match as MatchModel
 from ..schemas import (
     GroupCreate,
     GroupDetailResponse,
@@ -13,7 +14,11 @@ from ..schemas import (
     GroupMemberResponse,
     GroupResponse,
     LeaderboardEntry,
+    MemberPicksForGame,
+    MemberPicksResponse,
+    PickSummary,
 )
+from ..services.game_engine import get_pick_points_breakdown
 
 router = APIRouter()
 
@@ -194,6 +199,101 @@ def get_group_leaderboard(
         ))
 
     return result
+
+
+@router.get("/{group_id}/members/{user_id}/picks", response_model=MemberPicksResponse)
+def get_member_picks(
+    group_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    is_member = db.query(GroupMember).filter(
+        GroupMember.group_id == group_id,
+        GroupMember.user_id == current_user.id,
+    ).first()
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Not a member of this group")
+
+    target_member = db.query(GroupMember).filter(
+        GroupMember.group_id == group_id,
+        GroupMember.user_id == user_id,
+    ).first()
+    if not target_member:
+        raise HTTPException(status_code=404, detail="User not in group")
+
+    target_user = db.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    games = (
+        db.query(Game)
+        .join(Tournament)
+        .filter(Game.status.in_(["upcoming", "active"]))
+        .order_by(Tournament.start_date, Game.division)
+        .all()
+    )
+
+    result_games = []
+    for game in games:
+        picks = (
+            db.query(Pick)
+            .filter(Pick.game_id == game.id, Pick.user_id == user_id)
+            .all()
+        )
+
+        pick_summaries = []
+        for pick in picks:
+            r = db.get(Round, pick.round_id)
+            if not r or r.status != "completed":
+                continue
+            player = db.get(Player, pick.player_id)
+            if not player:
+                continue
+            streak_points, ranking_bonus, player_rank, opponent_rank = get_pick_points_breakdown(db, pick)
+            match = db.query(MatchModel).filter(
+                MatchModel.round_id == pick.round_id,
+                (MatchModel.player1_id == pick.player_id) | (MatchModel.player2_id == pick.player_id),
+            ).first()
+            opponent_name = None
+            if match:
+                opp_id = match.player2_id if match.player1_id == pick.player_id else match.player1_id
+                opp = db.get(Player, opp_id) if opp_id else None
+                opponent_name = opp.name if opp else None
+            pick_summaries.append(PickSummary(
+                round_id=pick.round_id,
+                round_name=r.name,
+                round_order=r.round_order,
+                player_id=pick.player_id,
+                player_name=player.name,
+                is_correct=pick.is_correct,
+                points_awarded=pick.points_awarded,
+                streak_points=streak_points,
+                ranking_bonus=ranking_bonus,
+                player_rank=player_rank,
+                opponent_rank=opponent_rank,
+                opponent_name=opponent_name,
+            ))
+
+        if pick_summaries:
+            pick_summaries.sort(key=lambda x: x.round_order)
+            tournament = db.get(Tournament, game.tournament_id)
+            result_games.append(MemberPicksForGame(
+                game_id=game.id,
+                tournament_title=tournament.title if tournament else "Unknown",
+                division=game.division,
+                picks=pick_summaries,
+            ))
+
+    return MemberPicksResponse(
+        user_id=user_id,
+        username=target_user.username,
+        games=result_games,
+    )
 
 
 @router.delete("/{group_id}/leave")
