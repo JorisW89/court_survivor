@@ -241,8 +241,8 @@ function PickPointsPreview({ player }) {
 
 // ── Future round — collapsible pick section ───────────────────────────────
 
-function FutureRoundPickSection({ gameId, round, now, existingPick }) {
-  const [open, setOpen] = useState(false)
+function FutureRoundPickSection({ gameId, round, now, existingPick, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
   const [roundData, setRoundData] = useState(null)
   const [selectedPlayer, setSelectedPlayer] = useState(null)
   const [submitting, setSubmitting] = useState(false)
@@ -262,6 +262,10 @@ function FutureRoundPickSection({ gameId, round, now, existingPick }) {
     }
     setDataLoaded(true)
   }
+
+  useEffect(() => {
+    if (defaultOpen) loadData()
+  }, []) // eslint-disable-line
 
   function handleToggle() {
     if (!open && !dataLoaded) loadData()
@@ -817,13 +821,14 @@ export default function GameDetail() {
       {user && futurePickableRounds.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs text-gray-400 uppercase tracking-wide font-medium px-1">Upcoming rounds</p>
-          {futurePickableRounds.map(round => (
+          {futurePickableRounds.map((round, index) => (
             <FutureRoundPickSection
               key={round.round_id}
               gameId={game.id}
               round={round}
               now={now}
               existingPick={myP?.my_picks?.find(p => p.round_id === round.round_id)}
+              defaultOpen={index === 0 && myPickMatchFinished}
             />
           ))}
         </div>

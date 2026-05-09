@@ -90,6 +90,27 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                     ))
             pick_summaries.sort(key=lambda x: x.round_order)
 
+            # If the user's pick for the current round is already resolved, advance
+            # current_round to the next round so the card and detail page reflect
+            # what they should act on next.
+            if current_round and any(
+                ps.round_id == current_round.id and ps.is_correct is not None
+                for ps in pick_summaries
+            ):
+                next_round = (
+                    db.query(Round)
+                    .filter(
+                        Round.tournament_id == game.tournament_id,
+                        Round.division == game.division,
+                        Round.status.in_(["upcoming", "open", "locked"]),
+                        Round.round_order > current_round.round_order,
+                    )
+                    .order_by(Round.round_order)
+                    .first()
+                )
+                if next_round:
+                    current_round = next_round
+
             my_participant = MyParticipant(
                 total_points=p.total_points,
                 current_streak=get_current_streak(db, game.id, user.id),
