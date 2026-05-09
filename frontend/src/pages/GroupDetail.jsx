@@ -198,7 +198,6 @@ export default function GroupDetail() {
   const [copied, setCopied] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [selectedMember, setSelectedMember] = useState(null) // { userId, username }
-  const [collapsedGames, setCollapsedGames] = useState(new Set())
 
   useEffect(() => {
     Promise.all([
@@ -232,15 +231,6 @@ export default function GroupDetail() {
 
   function openMemberPicks(userId, username) {
     setSelectedMember({ userId, username })
-  }
-
-  function toggleGame(gameId) {
-    setCollapsedGames(prev => {
-      const next = new Set(prev)
-      if (next.has(gameId)) next.delete(gameId)
-      else next.add(gameId)
-      return next
-    })
   }
 
   if (loading) {
@@ -310,45 +300,24 @@ export default function GroupDetail() {
             />
           </div>
 
-          {/* Per-game leaderboards (collapsible) */}
-          <div className="space-y-3">
-            {leaderboard.map(item => {
-              const collapsed = collapsedGames.has(item.game_id)
-              return (
-                <div key={item.game_id} className="card">
-                  <button
-                    className="w-full flex items-center justify-between text-left"
-                    onClick={() => toggleGame(item.game_id)}
-                  >
-                    <div>
-                      <h2 className="font-semibold text-gray-900 leading-snug">{item.tournament_title}</h2>
-                      <p className="text-xs text-gray-400 mt-0.5">{item.division}'s Draw</p>
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <Link
-                        to={`/games/${item.game_id}`}
-                        className="text-xs text-brand-600 font-medium hover:underline"
-                        onClick={e => e.stopPropagation()}
-                      >
-                        View game →
-                      </Link>
-                      <span className={`text-gray-400 transition-transform duration-200 ${collapsed ? '' : 'rotate-180'}`}>
-                        ▾
-                      </span>
-                    </div>
-                  </button>
-                  {!collapsed && (
-                    <div className="mt-4">
-                      <LeaderboardTable
-                        entries={item.entries}
-                        currentUserId={user?.id}
-                        onMemberClick={openMemberPicks}
-                      />
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+          {/* Game list */}
+          <div className="card">
+            <h2 className="font-semibold text-gray-900 mb-3">Games</h2>
+            <div className="divide-y divide-gray-50">
+              {leaderboard.map(item => (
+                <Link
+                  key={item.game_id}
+                  to={`/games/${item.game_id}`}
+                  className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-1 px-1 rounded-lg transition-colors"
+                >
+                  <div>
+                    <p className="font-medium text-gray-800 text-sm leading-snug">{item.tournament_title}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{item.division}'s Draw</p>
+                  </div>
+                  <span className="text-gray-300 text-sm">→</span>
+                </Link>
+              ))}
+            </div>
           </div>
         </>
       )}
