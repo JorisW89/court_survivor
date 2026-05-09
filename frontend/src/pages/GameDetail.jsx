@@ -387,7 +387,9 @@ function FutureRoundPickSection({ gameId, round, now, existingPick }) {
                 />
               ))}
               <div className="pt-2 space-y-2">
-                <PickPointsPreview player={selectedPlayerDetail} />
+                {(!selectedMatchIsLocked || selectedPickChanged) && (
+                  <PickPointsPreview player={selectedPlayerDetail} />
+                )}
                 {error && <p className="text-sm text-red-600">{error}</p>}
                 {successMsg && <p className="text-sm text-emerald-600">{successMsg}</p>}
                 {selectedMatchIsLocked && (
@@ -662,6 +664,10 @@ export default function GameDetail() {
     currentPickMatch &&
     !isMatchLocked(currentPickMatch)
   )
+  const myPickMatchFinished = Boolean(
+    alreadyPickedThisRound &&
+    currentPickMatch?.is_finished
+  )
   const selectedPlayerDetail = roundData?.matches
     ?.flatMap(m => [m.player1, m.player2])
     ?.find(p => p.id === selectedPlayer)
@@ -715,7 +721,7 @@ export default function GameDetail() {
       </div>
 
       {/* Current round — pick section */}
-      {currentRound && (
+      {currentRound && !myPickMatchFinished && (
         <div className="card">
           <div className="flex items-center justify-between mb-1">
             <h2 className="font-semibold text-gray-900">{currentRound.name}</h2>
@@ -835,13 +841,13 @@ export default function GameDetail() {
         </div>
       )}
 
-      {/* Full draw — all rounds except current and future pickable (already shown above) */}
-      {drawData?.rounds?.some(r => r.matches?.length > 0 && r.round_id !== currentRound?.id && !futurePickableRoundIds.has(r.round_id)) && (
+      {/* Full draw — all rounds except current (unless my pick finished) and future pickable (already shown above) */}
+      {drawData?.rounds?.some(r => r.matches?.length > 0 && (myPickMatchFinished || r.round_id !== currentRound?.id) && !futurePickableRoundIds.has(r.round_id)) && (
         <div className="card">
           <h2 className="font-semibold text-gray-900 mb-3">Full Draw</h2>
           <div className="space-y-2">
             {drawData.rounds
-              .filter(r => r.matches?.length > 0 && r.round_id !== currentRound?.id && !futurePickableRoundIds.has(r.round_id))
+              .filter(r => r.matches?.length > 0 && (myPickMatchFinished || r.round_id !== currentRound?.id) && !futurePickableRoundIds.has(r.round_id))
               .sort((a, b) => a.round_order - b.round_order)
               .map(r =>
                 r.status === 'completed'
