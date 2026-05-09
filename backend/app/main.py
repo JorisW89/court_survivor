@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,35 +20,136 @@ def get_cors_origins() -> list[str]:
     return [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
 
 
+def _resolve_tz(tz_name: str | None) -> timezone | ZoneInfo:
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError:
+            pass
+    return timezone.utc
+
+
+def _compute_next_scrape_time(db) -> datetime:
+    """
+    Decide when to run the next scrape using the tournament's local timezone.
+
+    Rules:
+    - Any matches today (local tournament time) without a result yet:
+        - If the first pending match hasn't started: schedule for 1h after it.
+        - If matches have already started but results missing: scrape in 1h.
+    - No pending matches today: find first match on the next match day,
+      schedule for 1h after it starts.
+    - No upcoming matches at all: check again in 24h.
+    """
+    from .models import Match, Tournament
+
+    now = datetime.now(timezone.utc)
+
+    # Find the timezone of the next upcoming match — that's what we're scheduling for.
+    tz_row = (
+        db.query(Tournament.timezone)
+        .join(Match, Match.tournament_id == Tournament.id)
+        .filter(Match.match_time >= now)
+        .order_by(Match.match_time)
+        .first()
+    )
+    tz = _resolve_tz(tz_row[0] if tz_row else None)
+
+    now_local = now.astimezone(tz)
+    today_local_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_local_end = today_local_start + timedelta(days=1)
+    today_start_utc = today_local_start.astimezone(timezone.utc)
+    today_end_utc = today_local_end.astimezone(timezone.utc)
+
+    # Matches today (local time) without a result yet — includes already-started matches.
+    pending_today = (
+        db.query(Match.match_time)
+        .join(Tournament, Match.tournament_id == Tournament.id)
+        .filter(
+            Match.match_time >= today_start_utc,
+            Match.match_time < today_end_utc,
+            Match.winner_id.is_(None),
+        )
+        .order_by(Match.match_time)
+        .first()
+    )
+
+    if pending_today:
+        first_pending = pending_today[0]
+        if first_pending.tzinfo is None:
+            first_pending = first_pending.replace(tzinfo=timezone.utc)
+        if first_pending > now:
+            # First match today hasn't started — schedule for 1h after it.
+            next_run = first_pending + timedelta(hours=1)
+            print(f"[scheduler] First match today at {first_pending.astimezone(tz).isoformat()}; scraping at {next_run.astimezone(tz).isoformat()}")
+        else:
+            # Match(es) already started, no result yet — keep checking hourly.
+            next_run = now + timedelta(hours=1)
+            print(f"[scheduler] Matches in progress with no result yet; next scrape in 1h at {next_run.isoformat()}")
+        return next_run
+
+    # No pending matches today — find the first match on the next match day.
+    next_match = (
+        db.query(Match.match_time, Tournament.timezone)
+        .join(Tournament, Match.tournament_id == Tournament.id)
+        .filter(Match.match_time >= today_end_utc)
+        .order_by(Match.match_time)
+        .first()
+    )
+
+    if next_match:
+        next_match_time, next_tz_name = next_match
+        if next_match_time.tzinfo is None:
+            next_match_time = next_match_time.replace(tzinfo=timezone.utc)
+        next_tz = _resolve_tz(next_tz_name)
+        next_run = next_match_time + timedelta(hours=1)
+        if next_run <= now:
+            next_run = now + timedelta(hours=1)
+        print(f"[scheduler] Next match day: first match at {next_match_time.astimezone(next_tz).isoformat()}; scraping at {next_run.astimezone(next_tz).isoformat()}")
+        return next_run
+
+    next_run = now + timedelta(hours=24)
+    print(f"[scheduler] No upcoming matches found; next scrape in 24h at {next_run.isoformat()}")
+    return next_run
+
+
 async def _scraper_loop() -> None:
     from .database import SessionLocal
     from .models import Tournament
     from .services.scraper_service import run_scraper_and_sync
 
-    # One-time startup catch-up: run immediately if last sync is more than 24h ago.
+    # One-time startup catch-up: run immediately if last sync is more than 4h ago.
     db = SessionLocal()
     try:
         last_synced = db.query(Tournament.last_synced).order_by(Tournament.last_synced.desc()).limit(1).scalar()
     finally:
         db.close()
 
+    needs_catchup = last_synced is None
     if last_synced is not None:
         if last_synced.tzinfo is None:
             last_synced = last_synced.replace(tzinfo=timezone.utc)
-        if (datetime.now(timezone.utc) - last_synced) > timedelta(hours=4):
-            print(f"[scheduler] Last sync was {last_synced.isoformat()}, running catch-up scrape now")
-            db = SessionLocal()
-            try:
-                await run_scraper_and_sync(db)
-            except Exception as e:
-                print(f"[scheduler] Catch-up scrape failed: {e}")
-            finally:
-                db.close()
+        needs_catchup = (datetime.now(timezone.utc) - last_synced) > timedelta(hours=4)
 
-    # Run every 4 hours.
+    if needs_catchup:
+        reason = "no prior sync found" if last_synced is None else f"last sync was {last_synced.isoformat()}"
+        print(f"[scheduler] Running catch-up scrape ({reason})")
+        db = SessionLocal()
+        try:
+            await run_scraper_and_sync(db)
+        except Exception as e:
+            print(f"[scheduler] Catch-up scrape failed: {e}")
+        finally:
+            db.close()
+
     while True:
-        next_run = datetime.now(timezone.utc) + timedelta(hours=4)
-        wait_seconds = timedelta(hours=4).total_seconds()
+        db = SessionLocal()
+        try:
+            next_run = _compute_next_scrape_time(db)
+        finally:
+            db.close()
+
+        wait_seconds = max((next_run - datetime.now(timezone.utc)).total_seconds(), 0)
         print(f"[scheduler] Next scrape at {next_run.isoformat()} (in {wait_seconds:.0f}s)")
         await asyncio.sleep(wait_seconds)
 

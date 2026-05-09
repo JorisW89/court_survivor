@@ -132,6 +132,62 @@ function LeaderboardTable({ entries, currentUserId, onMemberClick }) {
   )
 }
 
+function OverallLeaderboard({ leaderboard, currentUserId, onMemberClick }) {
+  const totals = {}
+  for (const game of leaderboard) {
+    for (const entry of game.entries) {
+      if (!totals[entry.user_id]) {
+        totals[entry.user_id] = { user_id: entry.user_id, username: entry.username, total_points: 0 }
+      }
+      totals[entry.user_id].total_points += entry.total_points
+    }
+  }
+
+  const sorted = Object.values(totals).sort((a, b) => b.total_points - a.total_points)
+  let rank = 1
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && sorted[i].total_points < sorted[i - 1].total_points) rank = i + 1
+    sorted[i].rank = rank
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-left py-2 text-xs font-medium text-gray-400 uppercase tracking-wide w-8">#</th>
+            <th className="text-left py-2 text-xs font-medium text-gray-400 uppercase tracking-wide">Player</th>
+            <th className="text-right py-2 text-xs font-medium text-gray-400 uppercase tracking-wide">Total pts</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-50">
+          {sorted.map(entry => (
+            <tr
+              key={entry.user_id}
+              className={`cursor-pointer hover:bg-gray-50 transition-colors ${entry.user_id === currentUserId ? 'bg-brand-50 hover:bg-brand-50' : ''}`}
+              onClick={() => onMemberClick(entry.user_id, entry.username)}
+            >
+              <td className="py-2.5 text-gray-400">{entry.rank}</td>
+              <td className="py-2.5">
+                <span className={`font-medium ${entry.user_id === currentUserId ? 'text-brand-700' : 'text-gray-800'}`}>
+                  {entry.username}
+                  {entry.user_id === currentUserId && <span className="text-xs text-brand-400 ml-1">(you)</span>}
+                </span>
+              </td>
+              <td className="py-2.5 text-right font-semibold text-gray-900">{entry.total_points}</td>
+            </tr>
+          ))}
+          {sorted.length === 0 && (
+            <tr>
+              <td colSpan={3} className="py-4 text-center text-gray-400 text-xs">No picks yet</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export default function GroupDetail() {
   const { id } = useParams()
   const { user } = useAuth()
@@ -142,6 +198,7 @@ export default function GroupDetail() {
   const [copied, setCopied] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [selectedMember, setSelectedMember] = useState(null) // { userId, username }
+  const [collapsedGames, setCollapsedGames] = useState(new Set())
 
   useEffect(() => {
     Promise.all([
@@ -175,6 +232,15 @@ export default function GroupDetail() {
 
   function openMemberPicks(userId, username) {
     setSelectedMember({ userId, username })
+  }
+
+  function toggleGame(gameId) {
+    setCollapsedGames(prev => {
+      const next = new Set(prev)
+      if (next.has(gameId)) next.delete(gameId)
+      else next.add(gameId)
+      return next
+    })
   }
 
   if (loading) {
@@ -228,33 +294,63 @@ export default function GroupDetail() {
         </div>
       </div>
 
-      {/* Per-game leaderboards */}
+      {/* Overall leaderboard */}
       {leaderboard.length === 0 ? (
         <div className="card text-center py-10">
           <p className="text-gray-400 text-sm">No active games with group members yet.</p>
         </div>
       ) : (
-        leaderboard.map(item => (
-          <div key={item.game_id} className="card">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="font-semibold text-gray-900 leading-snug">{item.tournament_title}</h2>
-                <p className="text-xs text-gray-400 mt-0.5">{item.division}'s Draw</p>
-              </div>
-              <Link
-                to={`/games/${item.game_id}`}
-                className="text-xs text-brand-600 font-medium hover:underline shrink-0"
-              >
-                View game →
-              </Link>
-            </div>
-            <LeaderboardTable
-              entries={item.entries}
+        <>
+          <div className="card">
+            <h2 className="font-semibold text-gray-900 mb-4">Overall standings</h2>
+            <OverallLeaderboard
+              leaderboard={leaderboard}
               currentUserId={user?.id}
               onMemberClick={openMemberPicks}
             />
           </div>
-        ))
+
+          {/* Per-game leaderboards (collapsible) */}
+          <div className="space-y-3">
+            {leaderboard.map(item => {
+              const collapsed = collapsedGames.has(item.game_id)
+              return (
+                <div key={item.game_id} className="card">
+                  <button
+                    className="w-full flex items-center justify-between text-left"
+                    onClick={() => toggleGame(item.game_id)}
+                  >
+                    <div>
+                      <h2 className="font-semibold text-gray-900 leading-snug">{item.tournament_title}</h2>
+                      <p className="text-xs text-gray-400 mt-0.5">{item.division}'s Draw</p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <Link
+                        to={`/games/${item.game_id}`}
+                        className="text-xs text-brand-600 font-medium hover:underline"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        View game →
+                      </Link>
+                      <span className={`text-gray-400 transition-transform duration-200 ${collapsed ? '' : 'rotate-180'}`}>
+                        ▾
+                      </span>
+                    </div>
+                  </button>
+                  {!collapsed && (
+                    <div className="mt-4">
+                      <LeaderboardTable
+                        entries={item.entries}
+                        currentUserId={user?.id}
+                        onMemberClick={openMemberPicks}
+                      />
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </>
       )}
 
       {/* Members list */}
