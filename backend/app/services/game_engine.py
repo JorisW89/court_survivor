@@ -70,7 +70,9 @@ def get_current_streak(db: Session, game_id: int, user_id: int, before_round: Op
     for round_obj in rounds:
         pick = picks_map.get(round_obj.id)
         if not pick:
-            break
+            if round_obj.status == "completed":
+                break
+            continue
         if pick.is_correct is True:
             streak += 1
         elif pick.is_correct is None:
