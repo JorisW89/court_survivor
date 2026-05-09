@@ -81,11 +81,11 @@ def _compute_next_scrape_time(db) -> datetime:
         if first_pending > now:
             # First match today hasn't started — schedule for 1h after it.
             next_run = first_pending + timedelta(hours=1)
-            print(f"[scheduler] First match today at {first_pending.astimezone(tz).isoformat()}; scraping at {next_run.astimezone(tz).isoformat()}")
+            print(f"[scheduler] Match day active — first match at {first_pending.astimezone(tz).isoformat()}, starting hourly scraping at {next_run.astimezone(tz).isoformat()}")
         else:
             # Match(es) already started, no result yet — keep checking hourly.
             next_run = now + timedelta(hours=1)
-            print(f"[scheduler] Matches in progress with no result yet; next scrape in 1h at {next_run.isoformat()}")
+            print(f"[scheduler] Match day active — results still pending, next scrape at {next_run.astimezone(tz).isoformat()}")
         return next_run
 
     # No pending matches today — find the first match on the next match day.
@@ -105,7 +105,7 @@ def _compute_next_scrape_time(db) -> datetime:
         next_run = next_match_time + timedelta(hours=1)
         if next_run <= now:
             next_run = now + timedelta(hours=1)
-        print(f"[scheduler] Next match day: first match at {next_match_time.astimezone(next_tz).isoformat()}; scraping at {next_run.astimezone(next_tz).isoformat()}")
+        print(f"[scheduler] No more matches today — next match day starts {next_match_time.astimezone(next_tz).isoformat()}, first scrape at {next_run.astimezone(next_tz).isoformat()}")
         return next_run
 
     next_run = now + timedelta(hours=24)
@@ -150,7 +150,6 @@ async def _scraper_loop() -> None:
             db.close()
 
         wait_seconds = max((next_run - datetime.now(timezone.utc)).total_seconds(), 0)
-        print(f"[scheduler] Next scrape at {next_run.isoformat()} (in {wait_seconds:.0f}s)")
         await asyncio.sleep(wait_seconds)
 
         db = SessionLocal()
