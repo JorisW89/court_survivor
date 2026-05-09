@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, get_optional_user
 from ..database import get_db
-from ..models import Game, GameParticipant, Pick, Player, Round, Tournament, User
+from ..models import Game, GameParticipant, Pick, Player, Round, Tournament, TournamentRankingSnapshot, User
 from ..models import Match as MatchModel
+from ..player_utils import normalize_player_name
 from ..schemas import (
     DrawResponse,
     GameResponse,
@@ -60,20 +61,55 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                 .all()
             )
             pick_summaries = []
-            for pick in picks:
-                r = db.get(Round, pick.round_id)
-                player = db.get(Player, pick.player_id)
-                if r and player:
-                    streak_points, ranking_bonus, player_rank, opponent_rank = get_pick_points_breakdown(db, pick)
-                    match = db.query(MatchModel).filter(
-                        MatchModel.round_id == pick.round_id,
-                        (MatchModel.player1_id == pick.player_id) | (MatchModel.player2_id == pick.player_id),
-                    ).first()
-                    opponent_name = None
+            if picks:
+                round_ids = {pick.round_id for pick in picks}
+                player_ids = {pick.player_id for pick in picks}
+                rounds_map = {r.id: r for r in db.query(Round).filter(Round.id.in_(round_ids)).all()}
+                players_map = {pl.id: pl for pl in db.query(Player).filter(Player.id.in_(player_ids)).all()}
+
+                all_round_matches = db.query(MatchModel).filter(MatchModel.round_id.in_(round_ids)).all()
+                matches_by_round: dict[int, list] = {}
+                for m in all_round_matches:
+                    matches_by_round.setdefault(m.round_id, []).append(m)
+
+                pick_match_map: dict[int, MatchModel] = {}
+                opp_ids: set[int] = set()
+                for pick in picks:
+                    for m in matches_by_round.get(pick.round_id, []):
+                        if m.player1_id == pick.player_id or m.player2_id == pick.player_id:
+                            pick_match_map[pick.id] = m
+                            opp_id = m.player2_id if m.player1_id == pick.player_id else m.player1_id
+                            if opp_id:
+                                opp_ids.add(opp_id)
+                            break
+                missing = opp_ids - set(players_map.keys())
+                if missing:
+                    players_map.update(
+                        {pl.id: pl for pl in db.query(Player).filter(Player.id.in_(missing)).all()}
+                    )
+
+                snapshot_map = {
+                    s.normalized_name: s.rank
+                    for s in db.query(TournamentRankingSnapshot).filter(
+                        TournamentRankingSnapshot.tournament_id == game.tournament_id,
+                        TournamentRankingSnapshot.division == game.division,
+                    ).all()
+                }
+
+                for pick in picks:
+                    r = rounds_map.get(pick.round_id)
+                    player = players_map.get(pick.player_id)
+                    if not r or not player:
+                        continue
+                    match = pick_match_map.get(pick.id)
+                    opp_id = None
                     if match:
                         opp_id = match.player2_id if match.player1_id == pick.player_id else match.player1_id
-                        opp = db.get(Player, opp_id) if opp_id else None
-                        opponent_name = opp.name if opp else None
+                    opponent = players_map.get(opp_id) if opp_id else None
+                    player_rank = snapshot_map.get(normalize_player_name(player.name))
+                    opponent_rank = snapshot_map.get(normalize_player_name(opponent.name)) if opponent else None
+                    ranking_bonus = calculate_ranking_bonus(player_rank, opponent_rank)
+                    streak_points = max(0, pick.points_awarded - ranking_bonus) if pick.is_correct is True else 0
                     pick_summaries.append(PickSummary(
                         round_id=pick.round_id,
                         round_name=r.name,
@@ -83,10 +119,10 @@ def _build_game_response(db: Session, game: Game, user: Optional[User]) -> GameR
                         is_correct=pick.is_correct,
                         points_awarded=pick.points_awarded,
                         streak_points=streak_points,
-                        ranking_bonus=ranking_bonus,
+                        ranking_bonus=ranking_bonus if pick.is_correct is True else 0,
                         player_rank=player_rank,
                         opponent_rank=opponent_rank,
-                        opponent_name=opponent_name,
+                        opponent_name=opponent.name if opponent else None,
                     ))
             pick_summaries.sort(key=lambda x: x.round_order)
 
@@ -186,16 +222,27 @@ def get_round_players(
         .all()
     )
 
+    # Batch-fetch all players in this round and their snapshot ranks
+    player_ids = {i for m in matches for i in (m.player1_id, m.player2_id) if i}
+    players_map = {pl.id: pl for pl in db.query(Player).filter(Player.id.in_(player_ids)).all()}
+    snapshot_map = {
+        s.normalized_name: s.rank
+        for s in db.query(TournamentRankingSnapshot).filter(
+            TournamentRankingSnapshot.tournament_id == game.tournament_id,
+            TournamentRankingSnapshot.division == game.division,
+        ).all()
+    }
+
     match_data = []
     streak_points = get_projected_streak_points(db, game_id, current_user.id, round_obj)
     for m in matches:
-        p1 = db.get(Player, m.player1_id) if m.player1_id else None
-        p2 = db.get(Player, m.player2_id) if m.player2_id else None
+        p1 = players_map.get(m.player1_id) if m.player1_id else None
+        p2 = players_map.get(m.player2_id) if m.player2_id else None
         if not p1 or not p2:
             continue
         match_locked = bool(m.match_time and is_locked_before(m.match_time, timedelta(hours=1)))
-        p1_rank = get_player_snapshot_rank(db, game.tournament_id, game.division, p1.name)
-        p2_rank = get_player_snapshot_rank(db, game.tournament_id, game.division, p2.name)
+        p1_rank = snapshot_map.get(normalize_player_name(p1.name))
+        p2_rank = snapshot_map.get(normalize_player_name(p2.name))
         p1_bonus = calculate_ranking_bonus(p1_rank, p2_rank)
         p2_bonus = calculate_ranking_bonus(p2_rank, p1_rank)
         match_data.append(MatchForPick(
@@ -254,21 +301,38 @@ def get_draw(
         .all()
     )
 
+    # Batch-fetch all matches and players for all rounds in one pass
+    round_ids = [r.id for r in rounds]
+    all_matches = (
+        db.query(MatchModel)
+        .filter(MatchModel.round_id.in_(round_ids))
+        .order_by(MatchModel.match_time, MatchModel.id)
+        .all()
+    )
+    matches_by_round: dict[int, list] = {}
+    all_player_ids: set[int] = set()
+    for m in all_matches:
+        matches_by_round.setdefault(m.round_id, []).append(m)
+        if m.player1_id:
+            all_player_ids.add(m.player1_id)
+        if m.player2_id:
+            all_player_ids.add(m.player2_id)
+        if m.winner_id:
+            all_player_ids.add(m.winner_id)
+    players_map = (
+        {pl.id: pl for pl in db.query(Player).filter(Player.id.in_(all_player_ids)).all()}
+        if all_player_ids else {}
+    )
+
     round_results = []
     for r in rounds:
-        matches = (
-            db.query(MatchModel)
-            .filter(MatchModel.round_id == r.id)
-            .order_by(MatchModel.match_time, MatchModel.id)
-            .all()
-        )
         match_results = []
-        for m in matches:
-            p1 = db.get(Player, m.player1_id) if m.player1_id else None
-            p2 = db.get(Player, m.player2_id) if m.player2_id else None
+        for m in matches_by_round.get(r.id, []):
+            p1 = players_map.get(m.player1_id) if m.player1_id else None
+            p2 = players_map.get(m.player2_id) if m.player2_id else None
             if not p1 or not p2:
                 continue
-            winner = db.get(Player, m.winner_id) if m.winner_id else None
+            winner = players_map.get(m.winner_id) if m.winner_id else None
             match_results.append(MatchResult(
                 match_id=m.id,
                 player1_name=p1.name,
@@ -305,11 +369,14 @@ def get_leaderboard(
         .all()
     )
 
+    user_ids = [p.user_id for p in participants]
+    users_map = {u.id: u for u in db.query(User).filter(User.id.in_(user_ids)).all()}
+
     entries = []
     rank = 1
     prev_points = None
-    for i, p in enumerate(participants):
-        user = db.get(User, p.user_id)
+    for p in participants:
+        user = users_map.get(p.user_id)
         if not user:
             continue
         if prev_points is not None and p.total_points < prev_points:

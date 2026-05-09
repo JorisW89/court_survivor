@@ -53,7 +53,7 @@ class Round(Base):
     __tablename__ = "rounds"
 
     id = Column(Integer, primary_key=True, index=True)
-    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)
     division = Column(String, nullable=False)  # Men, Women
     name = Column(String, nullable=False)
     round_order = Column(Integer, nullable=False)
@@ -65,18 +65,21 @@ class Round(Base):
     matches = relationship("Match", back_populates="round")
     picks = relationship("Pick", back_populates="round")
 
-    __table_args__ = (UniqueConstraint("tournament_id", "division", "name", name="uq_round"),)
+    __table_args__ = (
+        UniqueConstraint("tournament_id", "division", "name", name="uq_round"),
+        Index("ix_rounds_tournament_division", "tournament_id", "division"),
+    )
 
 
 class Match(Base):
     __tablename__ = "matches"
 
     id = Column(Integer, primary_key=True, index=True)
-    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
-    round_id = Column(Integer, ForeignKey("rounds.id"))
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)
+    round_id = Column(Integer, ForeignKey("rounds.id"), index=True)
     division = Column(String)
-    player1_id = Column(Integer, ForeignKey("players.id"))
-    player2_id = Column(Integer, ForeignKey("players.id"))
+    player1_id = Column(Integer, ForeignKey("players.id"), index=True)
+    player2_id = Column(Integer, ForeignKey("players.id"), index=True)
     winner_id = Column(Integer, ForeignKey("players.id"))
     score = Column(String)
     match_time = Column(DateTime(timezone=True))
@@ -112,8 +115,8 @@ class GameParticipant(Base):
     __tablename__ = "game_participants"
 
     id = Column(Integer, primary_key=True, index=True)
-    game_id = Column(Integer, ForeignKey("games.id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     total_points = Column(Integer, default=0)
     joined_at = Column(DateTime(timezone=True), default=_utcnow)
 
@@ -127,9 +130,9 @@ class Pick(Base):
     __tablename__ = "picks"
 
     id = Column(Integer, primary_key=True, index=True)
-    game_id = Column(Integer, ForeignKey("games.id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    round_id = Column(Integer, ForeignKey("rounds.id"), nullable=False)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    round_id = Column(Integer, ForeignKey("rounds.id"), nullable=False, index=True)
     player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
     submitted_at = Column(DateTime(timezone=True), default=_utcnow)
     is_correct = Column(Boolean, nullable=True)  # None = pending

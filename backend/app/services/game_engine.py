@@ -53,13 +53,22 @@ def get_current_streak(db: Session, game_id: int, user_id: int, before_round: Op
         rounds_query = rounds_query.filter(Round.status == "completed")
 
     rounds = rounds_query.order_by(Round.round_order.desc()).all()
-    streak = 0
-    for round_obj in rounds:
-        pick = db.query(Pick).filter(
+    if not rounds:
+        return 0
+
+    round_ids = [r.id for r in rounds]
+    picks_map = {
+        p.round_id: p
+        for p in db.query(Pick).filter(
             Pick.game_id == game_id,
             Pick.user_id == user_id,
-            Pick.round_id == round_obj.id,
-        ).first()
+            Pick.round_id.in_(round_ids),
+        ).all()
+    }
+
+    streak = 0
+    for round_obj in rounds:
+        pick = picks_map.get(round_obj.id)
         if not pick:
             break
         if pick.is_correct is True:
@@ -183,10 +192,48 @@ def recalculate_game_scores(db: Session, game_id: int) -> None:
         .order_by(Round.round_order)
         .all()
     )
+    if not rounds:
+        return
+
+    round_ids = [r.id for r in rounds]
+
+    # Batch-fetch all matches and players for all rounds up front
+    all_matches = db.query(Match).filter(Match.round_id.in_(round_ids)).all()
+    matches_by_round: dict[int, list[Match]] = {}
+    all_player_ids: set[int] = set()
+    for m in all_matches:
+        matches_by_round.setdefault(m.round_id, []).append(m)
+        if m.player1_id:
+            all_player_ids.add(m.player1_id)
+        if m.player2_id:
+            all_player_ids.add(m.player2_id)
+
+    players_map: dict[int, Player] = (
+        {p.id: p for p in db.query(Player).filter(Player.id.in_(all_player_ids)).all()}
+        if all_player_ids else {}
+    )
+
+    # Batch-fetch all picks for this game across all rounds
+    all_picks = db.query(Pick).filter(
+        Pick.game_id == game_id,
+        Pick.round_id.in_(round_ids),
+    ).all()
+    picks_by_round_user: dict[tuple[int, int], Pick] = {
+        (p.round_id, p.user_id): p for p in all_picks
+    }
+
+    # Pre-fetch ranking snapshot map to avoid per-pick queries
+    snapshot_map: dict[str, int] = {
+        s.normalized_name: s.rank
+        for s in db.query(TournamentRankingSnapshot).filter(
+            TournamentRankingSnapshot.tournament_id == game.tournament_id,
+            TournamentRankingSnapshot.division == game.division,
+        ).all()
+    }
 
     streaks: dict[int, int] = {participant.user_id: 0 for participant in participants}
     for round_obj in rounds:
-        matches = db.query(Match).filter(Match.round_id == round_obj.id).all()
+        matches = matches_by_round.get(round_obj.id, [])
         if not matches:
             continue
 
@@ -197,25 +244,26 @@ def recalculate_game_scores(db: Session, game_id: int) -> None:
             if m.player2_id:
                 player_match[m.player2_id] = m
 
-        picks = db.query(Pick).filter(Pick.game_id == game_id, Pick.round_id == round_obj.id).all()
-        picks_by_user = {pick.user_id: pick for pick in picks}
-
         for participant in participants:
-            pick = picks_by_user.get(participant.user_id)
+            pick = picks_by_round_user.get((round_obj.id, participant.user_id))
             if not pick:
-                # Only reset streak for missing picks once the round is fully done
                 if round_obj.status == "completed":
                     streaks[participant.user_id] = 0
                 continue
 
             match = player_match.get(pick.player_id)
             if not match or match.winner_id is None:
-                continue  # result not in yet
+                continue
 
             if pick.player_id == match.winner_id:
                 streaks[participant.user_id] = streaks.get(participant.user_id, 0) + 1
                 pick.is_correct = True
-                _, ranking_bonus, _, _ = get_pick_points_breakdown(db, pick)
+                player = players_map.get(pick.player_id)
+                opp_id = match.player2_id if match.player1_id == pick.player_id else match.player1_id
+                opponent = players_map.get(opp_id) if opp_id else None
+                player_rank = snapshot_map.get(normalize_player_name(player.name)) if player else None
+                opponent_rank = snapshot_map.get(normalize_player_name(opponent.name)) if opponent else None
+                ranking_bonus = calculate_ranking_bonus(player_rank, opponent_rank)
                 points = streaks[participant.user_id] + ranking_bonus
                 pick.points_awarded = points
                 participant.total_points += points
