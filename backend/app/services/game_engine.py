@@ -50,7 +50,7 @@ def get_current_streak(db: Session, game_id: int, user_id: int, before_round: Op
     if before_round:
         rounds_query = rounds_query.filter(Round.round_order < before_round.round_order)
     else:
-        rounds_query = rounds_query.filter(Round.status.in_(["completed", "locked"]))
+        rounds_query = rounds_query.filter(Round.status.in_(["completed", "locked", "open"]))
 
     rounds = rounds_query.order_by(Round.round_order.desc()).all()
     if not rounds:
@@ -73,6 +73,8 @@ def get_current_streak(db: Session, game_id: int, user_id: int, before_round: Op
             break
         if pick.is_correct is True:
             streak += 1
+        elif pick.is_correct is None:
+            continue
         else:
             break
     return streak
