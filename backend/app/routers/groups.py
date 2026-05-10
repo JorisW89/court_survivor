@@ -318,15 +318,15 @@ def get_member_picks(
         pick_summaries = []
         for pick in picks:
             r = rounds_map.get(pick.round_id)
-            if not r or r.status != "completed":
+            if not r:
+                continue
+            match = pick_match_map.get(pick.id)
+            if not match or match.winner_id is None:
                 continue
             player = players_map.get(pick.player_id)
             if not player:
                 continue
-            match = pick_match_map.get(pick.id)
-            opp_id = None
-            if match:
-                opp_id = match.player2_id if match.player1_id == pick.player_id else match.player1_id
+            opp_id = match.player2_id if match.player1_id == pick.player_id else match.player1_id
             opponent = players_map.get(opp_id) if opp_id else None
             player_rank = snapshot_map.get(normalize_player_name(player.name))
             opponent_rank = snapshot_map.get(normalize_player_name(opponent.name)) if opponent else None

@@ -40,7 +40,7 @@ function MemberPicksModal({ userId, username, groupId, onClose }) {
           )}
 
           {!loading && data && data.games.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-6">No completed rounds yet.</p>
+            <p className="text-sm text-gray-400 text-center py-6">No match results yet.</p>
           )}
 
           {!loading && data && data.games.map(game => (
