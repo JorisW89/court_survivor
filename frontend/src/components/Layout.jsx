@@ -9,7 +9,7 @@ export default function Layout() {
         <Outlet />
       </main>
       <footer className="text-center text-xs text-gray-400 py-4">
-        Not affiliated with or endorsed by PSA World Tour.
+        Not affiliated with or endorsed by PSA World Tour or ATP/WTA.
       </footer>
     </div>
   )

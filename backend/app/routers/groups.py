@@ -213,6 +213,7 @@ def get_group_leaderboard(
             game_id=game.id,
             tournament_title=tournament.title if tournament else "Unknown",
             division=game.division,
+            sport=tournament.sport if tournament else "squash",
             entries=entries,
         ))
 
@@ -354,6 +355,7 @@ def get_member_picks(
                 game_id=game.id,
                 tournament_title=tournament.title if tournament else "Unknown",
                 division=game.division,
+                sport=tournament.sport if tournament else "squash",
                 picks=pick_summaries,
             ))
 

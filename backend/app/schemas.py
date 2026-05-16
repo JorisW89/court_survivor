@@ -40,6 +40,7 @@ class TournamentResponse(BaseModel):
     start_date: Optional[str]
     end_date: Optional[str]
     status: str
+    sport: str = "squash"
 
     model_config = {"from_attributes": True}
 
@@ -196,6 +197,7 @@ class GroupLeaderboardEntry(BaseModel):
     game_id: int
     tournament_title: str
     division: str
+    sport: str = "squash"
     entries: list[LeaderboardEntry]
 
 
@@ -205,6 +207,7 @@ class MemberPicksForGame(BaseModel):
     game_id: int
     tournament_title: str
     division: str
+    sport: str = "squash"
     picks: list[PickSummary]
 
 
@@ -220,6 +223,7 @@ class ProfileGameEntry(BaseModel):
     game_id: int
     tournament_title: str
     division: str
+    sport: str = "squash"
     game_status: str
     total_points: int
     rank: Optional[int]

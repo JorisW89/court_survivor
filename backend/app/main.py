@@ -29,9 +29,9 @@ def _resolve_tz(tz_name: str | None) -> timezone | ZoneInfo:
     return timezone.utc
 
 
-def _compute_next_scrape_time(db) -> datetime:
+def _compute_next_scrape_time(db, sport: str) -> datetime:
     """
-    Decide when to run the next scrape using the tournament's local timezone.
+    Decide when to run the next scrape for a given sport.
 
     Rules:
     - Any matches today (local tournament time) without a result yet:
@@ -45,11 +45,11 @@ def _compute_next_scrape_time(db) -> datetime:
 
     now = datetime.now(timezone.utc)
 
-    # Find the timezone of the next upcoming match — that's what we're scheduling for.
+    # Find the timezone of the next upcoming match for this sport.
     tz_row = (
         db.query(Tournament.timezone)
         .join(Match, Match.tournament_id == Tournament.id)
-        .filter(Match.match_time >= now)
+        .filter(Tournament.sport == sport, Match.match_time >= now)
         .order_by(Match.match_time)
         .first()
     )
@@ -61,11 +61,11 @@ def _compute_next_scrape_time(db) -> datetime:
     today_start_utc = today_local_start.astimezone(timezone.utc)
     today_end_utc = today_local_end.astimezone(timezone.utc)
 
-    # Matches today (local time) without a result yet — includes already-started matches.
     pending_today = (
         db.query(Match.match_time)
         .join(Tournament, Match.tournament_id == Tournament.id)
         .filter(
+            Tournament.sport == sport,
             Match.match_time >= today_start_utc,
             Match.match_time < today_end_utc,
             Match.winner_id.is_(None),
@@ -79,20 +79,17 @@ def _compute_next_scrape_time(db) -> datetime:
         if first_pending.tzinfo is None:
             first_pending = first_pending.replace(tzinfo=timezone.utc)
         if first_pending > now:
-            # First match today hasn't started — schedule for 1h after it.
             next_run = first_pending + timedelta(hours=1)
-            print(f"[scheduler] Match day active — first match at {first_pending.astimezone(tz).isoformat()}, starting hourly scraping at {next_run.astimezone(tz).isoformat()}")
+            print(f"[scheduler:{sport}] Match day active — first match at {first_pending.astimezone(tz).isoformat()}, next scrape at {next_run.astimezone(tz).isoformat()}")
         else:
-            # Match(es) already started, no result yet — keep checking hourly.
             next_run = now + timedelta(hours=1)
-            print(f"[scheduler] Match day active — results still pending, next scrape at {next_run.astimezone(tz).isoformat()}")
+            print(f"[scheduler:{sport}] Results still pending, next scrape at {next_run.astimezone(tz).isoformat()}")
         return next_run
 
-    # No pending matches today — find the first match on the next match day.
     next_match = (
         db.query(Match.match_time, Tournament.timezone)
         .join(Tournament, Match.tournament_id == Tournament.id)
-        .filter(Match.match_time >= today_end_utc)
+        .filter(Tournament.sport == sport, Match.match_time >= today_end_utc)
         .order_by(Match.match_time)
         .first()
     )
@@ -105,23 +102,36 @@ def _compute_next_scrape_time(db) -> datetime:
         next_run = next_match_time + timedelta(hours=1)
         if next_run <= now:
             next_run = now + timedelta(hours=1)
-        print(f"[scheduler] No more matches today — next match day starts {next_match_time.astimezone(next_tz).isoformat()}, first scrape at {next_run.astimezone(next_tz).isoformat()}")
+        print(f"[scheduler:{sport}] Next match day {next_match_time.astimezone(next_tz).isoformat()}, first scrape at {next_run.astimezone(next_tz).isoformat()}")
         return next_run
 
     next_run = now + timedelta(hours=24)
-    print(f"[scheduler] No upcoming matches found; next scrape in 24h at {next_run.isoformat()}")
+    print(f"[scheduler:{sport}] No upcoming matches; next check in 24h")
     return next_run
 
 
-async def _scraper_loop() -> None:
+async def _scraper_loop(sport: str) -> None:
     from .database import SessionLocal
     from .models import Tournament
-    from .services.scraper_service import run_scraper_and_sync
 
-    # One-time startup catch-up: run immediately if last sync is more than 4h ago.
+    scrape_fn = None
+    if sport == "squash":
+        from .services.scraper_service import run_scraper_and_sync
+        scrape_fn = run_scraper_and_sync
+    elif sport == "tennis":
+        from .services.sofascore_service import run_tennis_scraper_and_sync
+        scrape_fn = run_tennis_scraper_and_sync
+
+    # Catch-up: run immediately if last sync for this sport is more than 4h ago.
     db = SessionLocal()
     try:
-        last_synced = db.query(Tournament.last_synced).order_by(Tournament.last_synced.desc()).limit(1).scalar()
+        last_synced = (
+            db.query(Tournament.last_synced)
+            .filter(Tournament.sport == sport)
+            .order_by(Tournament.last_synced.desc())
+            .limit(1)
+            .scalar()
+        )
     finally:
         db.close()
 
@@ -132,20 +142,20 @@ async def _scraper_loop() -> None:
         needs_catchup = (datetime.now(timezone.utc) - last_synced) > timedelta(hours=4)
 
     if needs_catchup:
-        reason = "no prior sync found" if last_synced is None else f"last sync was {last_synced.isoformat()}"
-        print(f"[scheduler] Running catch-up scrape ({reason})")
+        reason = "no prior sync" if last_synced is None else f"last sync {last_synced.isoformat()}"
+        print(f"[scheduler:{sport}] Catch-up scrape ({reason})")
         db = SessionLocal()
         try:
-            await run_scraper_and_sync(db)
+            await scrape_fn(db)
         except Exception as e:
-            print(f"[scheduler] Catch-up scrape failed: {e}")
+            print(f"[scheduler:{sport}] Catch-up failed: {e}")
         finally:
             db.close()
 
     while True:
         db = SessionLocal()
         try:
-            next_run = _compute_next_scrape_time(db)
+            next_run = _compute_next_scrape_time(db, sport)
         finally:
             db.close()
 
@@ -154,9 +164,9 @@ async def _scraper_loop() -> None:
 
         db = SessionLocal()
         try:
-            await run_scraper_and_sync(db)
+            await scrape_fn(db)
         except Exception as e:
-            print(f"[scheduler] Scraper failed: {e}")
+            print(f"[scheduler:{sport}] Scrape failed: {e}")
         finally:
             db.close()
 
@@ -166,6 +176,7 @@ async def lifespan(app: FastAPI):
     if settings.ENV == "development":
         from .database import SessionLocal
         from .services.scraper_service import run_scraper_and_sync
+        from .services.sofascore_service import run_tennis_scraper_and_sync
         from .seed import seed
 
         seed()
@@ -175,14 +186,23 @@ async def lifespan(app: FastAPI):
             try:
                 await run_scraper_and_sync(db)
             except Exception as e:
-                print(f"[startup] Scraper failed: {e}")
+                print(f"[startup] Squash scraper failed: {e}")
+            finally:
+                db.close()
+
+            db = SessionLocal()
+            try:
+                await run_tennis_scraper_and_sync(db)
+            except Exception as e:
+                print(f"[startup] Tennis scraper failed: {e}")
             finally:
                 db.close()
 
         asyncio.create_task(startup_scrape())
 
     if settings.ENV == "production":
-        asyncio.create_task(_scraper_loop())
+        asyncio.create_task(_scraper_loop("squash"))
+        asyncio.create_task(_scraper_loop("tennis"))
 
     yield
 

@@ -2,6 +2,17 @@ import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import SportIcon, { sportTheme } from '../components/SportIcon'
+
+function SportBadge({ sport }) {
+  const theme = sportTheme(sport ?? 'squash')
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${theme.pill}`}>
+      <SportIcon sport={sport ?? 'squash'} className="w-2.5 h-2.5" />
+      {theme.label}
+    </span>
+  )
+}
 
 function MemberPicksModal({ userId, username, groupId, onClose }) {
   const [data, setData] = useState(null)
@@ -46,7 +57,10 @@ function MemberPicksModal({ userId, username, groupId, onClose }) {
           {!loading && data && data.games.map(game => (
             <div key={game.game_id}>
               <div className="mb-2">
-                <p className="font-medium text-gray-800 text-sm leading-snug">{game.tournament_title}</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="font-medium text-gray-800 text-sm leading-snug">{game.tournament_title}</p>
+                  <SportBadge sport={game.sport} />
+                </div>
                 <p className="text-xs text-gray-400">{game.division}'s Draw</p>
               </div>
               <div className="overflow-x-auto">
@@ -197,7 +211,7 @@ export default function GroupDetail() {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [leaving, setLeaving] = useState(false)
-  const [selectedMember, setSelectedMember] = useState(null) // { userId, username }
+  const [selectedMember, setSelectedMember] = useState(null)
 
   useEffect(() => {
     Promise.all([
@@ -242,6 +256,14 @@ export default function GroupDetail() {
   }
 
   if (!group) return null
+
+  const sportGroups = leaderboard.reduce((acc, item) => {
+    const s = item.sport ?? 'squash'
+    if (!acc[s]) acc[s] = []
+    acc[s].push(item)
+    return acc
+  }, {})
+  const hasMultipleSports = Object.keys(sportGroups).length > 1
 
   return (
     <div className="space-y-6">
@@ -300,24 +322,55 @@ export default function GroupDetail() {
             />
           </div>
 
-          {/* Game list */}
+          {/* Game list — grouped by sport when mixed */}
           <div className="card">
             <h2 className="font-semibold text-gray-900 mb-3">Games</h2>
-            <div className="divide-y divide-gray-50">
-              {leaderboard.map(item => (
-                <Link
-                  key={item.game_id}
-                  to={`/games/${item.game_id}`}
-                  className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-1 px-1 rounded-lg transition-colors"
-                >
-                  <div>
-                    <p className="font-medium text-gray-800 text-sm leading-snug">{item.tournament_title}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{item.division}'s Draw</p>
-                  </div>
-                  <span className="text-gray-300 text-sm">→</span>
-                </Link>
-              ))}
-            </div>
+            {hasMultipleSports ? (
+              <div className="space-y-4">
+                {Object.entries(sportGroups).map(([sport, items]) => {
+                  const theme = sportTheme(sport)
+                  return (
+                    <div key={sport}>
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <SportIcon sport={sport} className={`w-3.5 h-3.5 ${theme.icon}`} />
+                        <span className={`text-xs font-semibold uppercase tracking-wide ${theme.text}`}>{theme.label}</span>
+                      </div>
+                      <div className="divide-y divide-gray-50">
+                        {items.map(item => (
+                          <Link
+                            key={item.game_id}
+                            to={`/games/${item.game_id}`}
+                            className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-1 px-1 rounded-lg transition-colors"
+                          >
+                            <div>
+                              <p className="font-medium text-gray-800 text-sm leading-snug">{item.tournament_title}</p>
+                              <p className="text-xs text-gray-400 mt-0.5">{item.division}'s Draw</p>
+                            </div>
+                            <span className="text-gray-300 text-sm">→</span>
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-50">
+                {leaderboard.map(item => (
+                  <Link
+                    key={item.game_id}
+                    to={`/games/${item.game_id}`}
+                    className="flex items-center justify-between py-3 hover:bg-gray-50 -mx-1 px-1 rounded-lg transition-colors"
+                  >
+                    <div>
+                      <p className="font-medium text-gray-800 text-sm leading-snug">{item.tournament_title}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{item.division}'s Draw</p>
+                    </div>
+                    <span className="text-gray-300 text-sm">→</span>
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
         </>
       )}

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import SportIcon, { sportTheme } from '../components/SportIcon'
 
 function StatCard({ label, value, sub }) {
   return (
@@ -22,6 +23,16 @@ function statusBadge(status) {
   return (
     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium capitalize ${map[status] ?? 'bg-gray-100 text-gray-500'}`}>
       {status}
+    </span>
+  )
+}
+
+function SportBadge({ sport }) {
+  const theme = sportTheme(sport ?? 'squash')
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${theme.pill}`}>
+      <SportIcon sport={sport ?? 'squash'} className="w-2.5 h-2.5" />
+      {theme.label}
     </span>
   )
 }
@@ -57,6 +68,13 @@ export default function Profile() {
     ? new Date(stats.member_since).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
     : null
 
+  const sportCounts = stats.games.reduce((acc, g) => {
+    const s = g.sport ?? 'squash'
+    acc[s] = (acc[s] || 0) + 1
+    return acc
+  }, {})
+  const hasMultipleSports = Object.keys(sportCounts).length > 1
+
   return (
     <div className="space-y-7">
       {/* Header */}
@@ -67,6 +85,13 @@ export default function Profile() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">{stats.username}</h1>
           {memberSince && <p className="text-sm text-gray-400">Member since {memberSince}</p>}
+          {hasMultipleSports && (
+            <div className="flex items-center gap-1.5 mt-1">
+              {Object.keys(sportCounts).map(s => (
+                <SportBadge key={s} sport={s} />
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -114,7 +139,7 @@ export default function Profile() {
                 <tr>
                   <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Tournament</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden sm:table-cell">Division</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden sm:table-cell">Status</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden md:table-cell">Status</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Pts</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Rank</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden sm:table-cell">Correct</th>
@@ -127,10 +152,13 @@ export default function Profile() {
                       <Link to={`/games/${g.game_id}`} className="font-medium text-gray-900 hover:text-brand-600 transition-colors line-clamp-1">
                         {g.tournament_title}
                       </Link>
-                      <span className="text-xs text-gray-400 sm:hidden">{g.division}'s</span>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-xs text-gray-400 sm:hidden">{g.division}'s</span>
+                        <SportBadge sport={g.sport} />
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{g.division}'s</td>
-                    <td className="px-4 py-3 hidden sm:table-cell">{statusBadge(g.game_status)}</td>
+                    <td className="px-4 py-3 hidden md:table-cell">{statusBadge(g.game_status)}</td>
                     <td className="px-4 py-3 text-right font-semibold text-gray-900">{g.total_points}</td>
                     <td className="px-4 py-3 text-right text-gray-500">
                       {g.rank ? `#${g.rank}` : '—'}

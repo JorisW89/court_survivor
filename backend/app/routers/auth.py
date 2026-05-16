@@ -105,6 +105,7 @@ def get_my_stats(
             game_id=p.game_id,
             tournament_title=tournament.title,
             division=game.division,
+            sport=tournament.sport,
             game_status=game.status,
             total_points=p.total_points,
             rank=rank,

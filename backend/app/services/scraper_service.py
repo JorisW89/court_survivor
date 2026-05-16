@@ -212,14 +212,15 @@ def upsert_round(db: Session, tournament_id: int, division: str, round_name: str
     return r
 
 
-def sync_tournaments(db: Session, data: list[dict]) -> None:
+def sync_tournaments(db: Session, data: list[dict], sport: str = "squash") -> None:
     for t_data in data:
         url = t_data.get("url", "").rstrip("/") + "/"
         tournament = db.query(Tournament).filter(Tournament.psa_url == url).first()
         if not tournament:
-            tournament = Tournament(psa_url=url)
+            tournament = Tournament(psa_url=url, sport=sport)
             db.add(tournament)
 
+        tournament.sport = sport
         tournament.title = t_data.get("title", "Unknown")
         tournament.category = t_data.get("category")
         tournament.start_date = t_data.get("start_date")
@@ -247,7 +248,7 @@ def sync_tournaments(db: Session, data: list[dict]) -> None:
         divisions_in_data = {m.get("division") for m in t_data.get("matches", []) if m.get("division")}
         for division in divisions_in_data:
             _ensure_game(db, tournament.id, division)
-            _ensure_ranking_snapshot(db, tournament.id, division)
+            _ensure_ranking_snapshot(db, tournament.id, division, sport=sport)
 
         # Sync matches
         for m_data in t_data.get("matches", []):
@@ -288,7 +289,7 @@ def _ensure_game(db: Session, tournament_id: int, division: str) -> Game:
     return game
 
 
-def _ensure_ranking_snapshot(db: Session, tournament_id: int, division: str) -> None:
+def _ensure_ranking_snapshot(db: Session, tournament_id: int, division: str, sport: str = "squash") -> None:
     has_snapshot = db.query(TournamentRankingSnapshot).filter(
         TournamentRankingSnapshot.tournament_id == tournament_id,
         TournamentRankingSnapshot.division == division,
@@ -298,7 +299,7 @@ def _ensure_ranking_snapshot(db: Session, tournament_id: int, division: str) -> 
 
     rankings = (
         db.query(Ranking)
-        .filter(Ranking.division == division)
+        .filter(Ranking.sport == sport, Ranking.division == division)
         .order_by(Ranking.rank, Ranking.player_name)
         .all()
     )
@@ -491,8 +492,8 @@ def scrape_rankings() -> Dict[str, List[Dict[str, Any]]]:
     return result
 
 
-def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]]) -> None:
-    """Replace all ranking rows with the freshly scraped data."""
+def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]], sport: str = "squash") -> None:
+    """Replace ranking rows for the given sport with freshly scraped data."""
     # Drop the old unique constraint if it still exists (it incorrectly prevented tied ranks)
     try:
         db.execute(text("ALTER TABLE rankings DROP CONSTRAINT IF EXISTS uq_ranking"))
@@ -500,7 +501,7 @@ def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]]) -> Non
     except Exception:
         db.rollback()
 
-    db.execute(text("DELETE FROM rankings"))
+    db.execute(text("DELETE FROM rankings WHERE sport = :sport"), {"sport": sport})
     now = datetime.now(timezone.utc)
 
     deduped_rankings = _dedupe_rankings(rankings)
@@ -508,6 +509,7 @@ def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]]) -> Non
     for division, entries in deduped_rankings.items():
         for entry in entries:
             db.add(Ranking(
+                sport       = sport,
                 division    = division,
                 rank        = entry["rank"],
                 player_name = entry["player_name"],
@@ -517,7 +519,7 @@ def sync_rankings(db: Session, rankings: Dict[str, List[Dict[str, Any]]]) -> Non
 
     db.commit()
     _backfill_missing_ranking_snapshots(db)
-    print(f"[rankings] Sync complete — {sum(len(v) for v in deduped_rankings.values())} rows written")
+    print(f"[rankings] Sync complete ({sport}) — {sum(len(v) for v in deduped_rankings.values())} rows written")
 
 
 def _dedupe_rankings(rankings: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -547,19 +549,19 @@ def _backfill_missing_ranking_snapshots(db: Session) -> None:
     )
     upcoming_ids = [t.id for t in upcoming]
     if upcoming_ids:
-        db.execute(
-            text("DELETE FROM tournament_ranking_snapshots WHERE tournament_id = ANY(:ids)"),
-            {"ids": upcoming_ids},
-        )
+        db.query(TournamentRankingSnapshot).filter(
+            TournamentRankingSnapshot.tournament_id.in_(upcoming_ids)
+        ).delete(synchronize_session=False)
         db.commit()
 
     seen = set()
     for tournament in upcoming:
+        sport = tournament.sport or "squash"
         for division in ("Men", "Women"):
             key = (tournament.id, division)
             if key not in seen:
                 seen.add(key)
-                _ensure_ranking_snapshot(db, tournament.id, division)
+                _ensure_ranking_snapshot(db, tournament.id, division, sport=sport)
 
     # Also backfill any game tournaments that may have been missed.
     games = db.query(Game).all()
@@ -567,7 +569,9 @@ def _backfill_missing_ranking_snapshots(db: Session) -> None:
         key = (game.tournament_id, game.division)
         if key not in seen:
             seen.add(key)
-            _ensure_ranking_snapshot(db, game.tournament_id, game.division)
+            tournament = db.get(Tournament, game.tournament_id)
+            sport = (tournament.sport or "squash") if tournament else "squash"
+            _ensure_ranking_snapshot(db, game.tournament_id, game.division, sport=sport)
 
     db.commit()
 

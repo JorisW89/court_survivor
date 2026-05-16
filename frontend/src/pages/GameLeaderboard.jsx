@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { formatDateRange } from '../utils/format'
+import SportIcon, { sportTheme, sportCategoryLabel } from '../components/SportIcon'
 
 export default function GameLeaderboard() {
   const { id } = useParams()
@@ -33,6 +34,21 @@ export default function GameLeaderboard() {
     <div className="space-y-6">
       <div>
         <Link to={`/games/${id}`} className="text-sm text-gray-400 hover:text-gray-600 mb-2 inline-block">← Back to game</Link>
+        {(() => {
+          const sport = game.tournament.sport ?? 'squash'
+          const theme = sportTheme(sport)
+          return (
+            <div className="flex items-center gap-2 mb-1">
+              <SportIcon sport={sport} className={`w-3.5 h-3.5 ${theme.icon}`} />
+              <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">
+                {sportCategoryLabel(sport, game.tournament.category)}
+              </p>
+              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${theme.pill}`}>
+                {theme.label}
+              </span>
+            </div>
+          )
+        })()}
         <h1 className="text-xl font-bold text-gray-900">{game.tournament.title}</h1>
         <p className="text-sm text-gray-500">
           {formatDateRange(game.tournament.start_date, game.tournament.end_date)} · {game.division}'s Draw

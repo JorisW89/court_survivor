@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { formatDeadline, formatDateRange } from '../utils/format'
+import SportIcon, { sportTheme, sportCategoryLabel } from './SportIcon'
 
 function StatusBadge({ game, myParticipant }) {
   if (!myParticipant) return null
@@ -11,6 +12,8 @@ function StatusBadge({ game, myParticipant }) {
 
 export default function GameCard({ game }) {
   const { tournament, division, current_round, participant_count, my_participant } = game
+  const sport = tournament.sport ?? 'squash'
+  const theme = sportTheme(sport)
 
   const needsPick = my_participant &&
     current_round?.status === 'open' &&
@@ -23,21 +26,29 @@ export default function GameCard({ game }) {
   return (
     <Link
       to={`/games/${game.id}`}
-      className={`card block hover:shadow-md transition-shadow ${needsPick ? 'ring-2 ring-brand-500' : ''}`}
+      className={`card block hover:shadow-md transition-shadow ${needsPick ? `ring-2 ${theme.ring}` : ''}`}
     >
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">
-            {tournament.category || 'PSA World Tour'}
-          </p>
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <SportIcon sport={sport} className={`w-3.5 h-3.5 shrink-0 ${theme.icon}`} />
+            <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+              {sportCategoryLabel(sport, tournament.category)}
+            </p>
+          </div>
           <h3 className="font-semibold text-gray-900 leading-snug">{tournament.title}</h3>
           <p className="text-sm text-gray-500 mt-0.5">{formatDateRange(tournament.start_date, tournament.end_date)}</p>
         </div>
-        <span className={`shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full ${
-          division === 'Men' ? 'bg-blue-50 text-blue-700' : 'bg-pink-50 text-pink-700'
-        }`}>
-          {division === 'Men' ? "Men's" : "Women's"}
-        </span>
+        <div className="flex flex-col items-end gap-1.5 shrink-0">
+          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+            division === 'Men' ? 'bg-blue-50 text-blue-700' : 'bg-pink-50 text-pink-700'
+          }`}>
+            {division === 'Men' ? "Men's" : "Women's"}
+          </span>
+          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${theme.pill}`}>
+            {theme.label}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center justify-between">

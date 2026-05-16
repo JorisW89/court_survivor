@@ -27,7 +27,8 @@ class Tournament(Base):
     __tablename__ = "tournaments"
 
     id = Column(Integer, primary_key=True, index=True)
-    psa_url = Column(String, unique=True, nullable=False)
+    psa_url = Column(String, unique=True, nullable=True)
+    sport = Column(String, nullable=False, default="squash")  # squash, tennis
     title = Column(String, nullable=False)
     category = Column(String)
     start_date = Column(String)
@@ -177,6 +178,7 @@ class Ranking(Base):
     __tablename__ = "rankings"
 
     id = Column(Integer, primary_key=True, index=True)
+    sport = Column(String, nullable=False, default="squash")  # squash, tennis
     division = Column(String, nullable=False)       # "Men" or "Women"
     rank = Column(Integer, nullable=False)
     player_name = Column(String, nullable=False)
