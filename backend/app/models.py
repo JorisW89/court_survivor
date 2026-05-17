@@ -173,6 +173,20 @@ class GroupMember(Base):
     __table_args__ = (UniqueConstraint("group_id", "user_id", name="uq_group_member"),)
 
 
+class GroupGame(Base):
+    """Tracks which games count toward a group's leaderboard. If no rows exist for a group, all active games count."""
+
+    __tablename__ = "group_games"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("groups.id"), nullable=False, index=True)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=False, index=True)
+    added_at = Column(DateTime(timezone=True), default=_utcnow)
+    added_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    __table_args__ = (UniqueConstraint("group_id", "game_id", name="uq_group_game"),)
+
+
 class Ranking(Base):
     __tablename__ = "rankings"
 
