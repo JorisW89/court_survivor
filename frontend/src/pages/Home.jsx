@@ -7,6 +7,7 @@ import GameCard from '../components/GameCard'
 import HowItWorks from '../components/HowItWorks'
 
 function isTournamentFinished(game) {
+  if (game.status === 'completed') return true
   const end = game.tournament?.end_date
   return end ? isPast(parseISO(end)) : false
 }
