@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from .scraper_service import sync_rankings, sync_tournaments
 
-BASE_URL = "https://api.sofascore.com/api/v1"
+BASE_URL = "https://www.sofascore.com/api/v1"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -53,16 +53,23 @@ _NAME_ALIASES: Dict[str, str] = {
     "french open": "Roland Garros",
 }
 
-# Sofascore round number → round name (Grand Slam knockout draw)
-ROUND_NAMES: Dict[int, str] = {
-    1: "Round 1",
-    2: "Round 2",
-    3: "Round 3",
-    4: "Round 4",
-    5: "Quarter Final",
-    6: "Semi Final",
-    7: "Final",
+# Sofascore cupTree round description → canonical round name
+_CUPTREE_ROUND_MAP: Dict[str, str] = {
+    "round of 128":       "Round 1",
+    "round of 64":        "Round 2",
+    "round of 32":        "Round 3",
+    "round of 16":        "Round 4",
+    "quarterfinal":       "Quarter Final",
+    "semifinal":          "Semi Final",
+    "final":              "Final",
+    "qualification round 1": "Qualification Round 1",
+    "qualification round 2": "Qualification Round 2",
+    "qualification final":   "Qualification Final",
 }
+
+
+def _cuptree_round_name(description: str) -> str:
+    return _CUPTREE_ROUND_MAP.get(description.strip().lower(), description.strip())
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -71,6 +78,8 @@ def _get(path: str) -> Optional[dict]:
     time.sleep(REQUEST_DELAY)
     try:
         resp = requests.get(f"{BASE_URL}{path}", headers=HEADERS, timeout=15)
+        if resp.status_code == 404:
+            return None
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -220,72 +229,68 @@ def _slam_approximate_in_window(canonical_name: str, lookahead_days: int = LOOKA
 
 # ── Match fetching ────────────────────────────────────────────────────────────
 
-def _round_numbers(tournament_id: int, season_id: int) -> List[int]:
-    data = _get(f"/unique-tournament/{tournament_id}/season/{season_id}/rounds")
+def _fetch_matches_from_cuptrees(tournament_id: int, season_id: int, division: str) -> List[dict]:
+    """
+    Fetch all bracket matches from the Sofascore cupTrees endpoint.
+    Returns match dicts compatible with sync_tournaments.
+    Player names, seeds, winners, and match times are all embedded in the
+    block-level participants — no per-event API calls needed.
+    """
+    data = _get(f"/unique-tournament/{tournament_id}/season/{season_id}/cuptrees")
     if not data:
         return []
-    return [r["round"] for r in data.get("rounds", []) if "round" in r]
 
-
-def _events_for_round(tournament_id: int, season_id: int, round_num: int) -> List[dict]:
-    data = _get(f"/unique-tournament/{tournament_id}/season/{season_id}/events/round/{round_num}")
-    if not data:
-        return []
-    return data.get("events", [])
-
-
-def _format_score(event: dict) -> Optional[str]:
-    """Build '6-3, 6-4, 7-5' score string from Sofascore period scores."""
-    home = event.get("homeScore") or {}
-    away = event.get("awayScore") or {}
-    sets = []
-    for i in range(1, 6):
-        h = home.get(f"period{i}")
-        a = away.get(f"period{i}")
-        if h is None or a is None:
-            break
-        sets.append(f"{h}-{a}")
-    return ", ".join(sets) if sets else None
-
-
-def _convert_event(event: dict, division: str, round_name: str) -> Optional[dict]:
-    """Convert a Sofascore event to the match dict sync_tournaments expects."""
-    # Sofascore uses homeTeam/awayTeam even for individual sports like tennis
-    player1 = ((event.get("homeTeam") or {}).get("name") or "").strip()
-    player2 = ((event.get("awayTeam") or {}).get("name") or "").strip()
-    if not player1 or not player2:
-        return None
-
-    match_time_str = None
-    ts = event.get("startTimestamp")
-    if ts:
-        match_time_str = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-
-    # winnerCode: 1 = homeTeam wins, 2 = awayTeam wins
-    wc = event.get("winnerCode")
-    winner = player1 if wc == 1 else (player2 if wc == 2 else None)
-
-    return {
-        "raw_id": f"sofascore_{event['id']}",
-        "division": division,
-        "round_name": round_name,
-        "player1": player1,
-        "player2": player2,
-        "match_time": match_time_str,
-        "score": _format_score(event),
-        "winner": winner,
-    }
-
-
-def _fetch_matches(tournament_id: int, season_id: int, division: str) -> List[dict]:
     matches = []
-    for round_num in _round_numbers(tournament_id, season_id):
-        round_name = ROUND_NAMES.get(round_num, f"Round {round_num}")
-        for event in _events_for_round(tournament_id, season_id, round_num):
-            m = _convert_event(event, division, round_name)
-            if m:
-                matches.append(m)
+    for tree in data.get("cupTrees", []):
+        if "qualifying" in tree.get("name", "").lower():
+            continue
+        for rnd in tree.get("rounds", []):
+            round_name = _cuptree_round_name(rnd.get("description", ""))
+            for block in rnd.get("blocks", []):
+                participants = block.get("participants", [])
+                if len(participants) < 2:
+                    continue
+                p1, p2 = participants[0], participants[1]
+                t1 = p1.get("team") or {}
+                t2 = p2.get("team") or {}
+                player1 = (t1.get("name") or "").strip()
+                player2 = (t2.get("name") or "").strip()
+                # Skip placeholder participants (e.g. "R64P1", "Qf1", "WSF2").
+                # Real player slugs contain a hyphen and never end with a digit.
+                slug1 = t1.get("slug", "")
+                slug2 = t2.get("slug", "")
+                def _is_placeholder(slug: str) -> bool:
+                    return not slug or "-" not in slug or slug[-1].isdigit()
+                if not player1 or not player2 or _is_placeholder(slug1) or _is_placeholder(slug2):
+                    continue
+
+                winner = None
+                if p1.get("winner"):
+                    winner = player1
+                elif p2.get("winner"):
+                    winner = player2
+
+                match_time_str = None
+                ts = block.get("seriesStartDateTimestamp")
+                if ts:
+                    match_time_str = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+                events = block.get("events", [])
+                raw_id = f"sofascore_{events[0]}" if events else f"sofascore_block_{block['id']}"
+
+                matches.append({
+                    "raw_id": raw_id,
+                    "division": division,
+                    "round_name": round_name,
+                    "player1": player1,
+                    "player2": player2,
+                    "match_time": match_time_str,
+                    "score": None,
+                    "winner": winner,
+                })
     return matches
+
+
 
 
 # ── Rankings ──────────────────────────────────────────────────────────────────
@@ -435,7 +440,7 @@ def fetch_active_grand_slams(lookahead_days: int = LOOKAHEAD_DAYS) -> List[dict]
             matches: List[dict] = []
         else:
             print(f"[sofascore] Syncing {title} (ATP id={atp_id}, season={season_id})")
-            matches = _fetch_matches(atp_id, season_id, "Men")
+            matches = _fetch_matches_from_cuptrees(atp_id, season_id, "Men")
 
         wta_id = slam.get("wta_id")
         if wta_id and not stale_season:
@@ -454,7 +459,7 @@ def fetch_active_grand_slams(lookahead_days: int = LOOKAHEAD_DAYS) -> List[dict]
                 if wta_in_window and not wta_stale:
                     wta_season_id = wta_season["id"]
                     print(f"[sofascore] Syncing {title} WTA (id={wta_id}, season={wta_season_id})")
-                    matches.extend(_fetch_matches(wta_id, wta_season_id, "Women"))
+                    matches.extend(_fetch_matches_from_cuptrees(wta_id, wta_season_id, "Women"))
                 elif wta_stale:
                     print(f"[sofascore] {name} WTA: season {wta_season.get('year')} is stale — skipping WTA matches")
                 else:
