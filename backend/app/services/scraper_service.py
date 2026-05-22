@@ -589,6 +589,22 @@ def _backfill_missing_ranking_snapshots(db: Session) -> None:
     db.commit()
 
 
+def _mark_stale_tournaments_completed(db: Session) -> None:
+    today = datetime.now(timezone.utc).date()
+    stale = (
+        db.query(Tournament)
+        .filter(Tournament.status.in_(["upcoming", "active"]))
+        .all()
+    )
+    for t in stale:
+        end = _parse_date(t.end_date)
+        if end and today > end:
+            t.status = "completed"
+            for game in db.query(Game).filter(Game.tournament_id == t.id).all():
+                game.status = "completed"
+    db.commit()
+
+
 async def run_scraper_and_sync(db: Session) -> None:
     import sys
     sys.path.insert(0, str(ROOT_DIR))
@@ -610,6 +626,7 @@ async def run_scraper_and_sync(db: Session) -> None:
 
         from .game_engine import evaluate_all_completed_rounds
         evaluate_all_completed_rounds(db)
+        _mark_stale_tournaments_completed(db)
         print("[scraper] Sync complete")
 
     except Exception as e:
