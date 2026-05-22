@@ -172,7 +172,6 @@ def list_games(
     games = (
         db.query(Game)
         .join(Tournament)
-        .filter(Game.status.in_(["upcoming", "active"]))
         .order_by(Tournament.start_date, Game.division)
         .all()
     )
