@@ -402,9 +402,26 @@ def _update_round_deadlines(db: Session, tournament_id: int) -> None:
 
         # If every match in the round has a winner, the round is done — no match
         # times required (completed rounds often lack PSA time data).
-        if all_matches and all(m.winner_id is not None for m in all_matches):
+        # Exclude superseded matches: a match is superseded when one of its players
+        # already has a result in a different match (i.e. withdrawal + replacement).
+        players_with_result: set[int] = set()
+        for m in all_matches:
+            if m.winner_id is not None:
+                if m.player1_id:
+                    players_with_result.add(m.player1_id)
+                if m.player2_id:
+                    players_with_result.add(m.player2_id)
+        active_matches = [
+            m for m in all_matches
+            if m.winner_id is not None
+            or not (
+                (m.player1_id and m.player1_id in players_with_result)
+                or (m.player2_id and m.player2_id in players_with_result)
+            )
+        ]
+        if active_matches and all(m.winner_id is not None for m in active_matches):
             r.status = "completed"
-            timed = [m for m in all_matches if m.match_time]
+            timed = [m for m in active_matches if m.match_time]
             if timed:
                 def _as_utc(dt: datetime) -> datetime:
                     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)

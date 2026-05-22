@@ -201,6 +201,15 @@ class GroupLeaderboardEntry(BaseModel):
     entries: list[LeaderboardEntry]
 
 
+class GroupGameItem(BaseModel):
+    game_id: int
+    tournament_title: str
+    division: str
+    game_status: str
+    tournament_end_date: Optional[str]
+    selected: bool
+
+
 # --- Member picks ---
 
 class MemberPicksForGame(BaseModel):

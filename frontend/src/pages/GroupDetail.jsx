@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
+import { isPast, parseISO } from 'date-fns'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import SportIcon, { sportTheme } from '../components/SportIcon'
@@ -202,6 +203,122 @@ function OverallLeaderboard({ leaderboard, currentUserId, onMemberClick }) {
   )
 }
 
+function TournamentFilter({ groupId }) {
+  const [open, setOpen] = useState(false)
+  const [games, setGames] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [toggling, setToggling] = useState(new Set())
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api.get(`/groups/${groupId}/games`)
+      .then(r => setGames(r.data))
+      .finally(() => setLoading(false))
+  }, [groupId])
+
+  useEffect(() => {
+    if (open && games.length === 0) load()
+  }, [open, load, games.length])
+
+  async function toggle(game) {
+    if (toggling.has(game.game_id)) return
+    setToggling(prev => new Set(prev).add(game.game_id))
+    try {
+      if (game.selected) {
+        await api.delete(`/groups/${groupId}/games/${game.game_id}`)
+      } else {
+        await api.post(`/groups/${groupId}/games/${game.game_id}`)
+      }
+      setGames(prev => prev.map(g =>
+        g.game_id === game.game_id ? { ...g, selected: !g.selected } : g
+      ))
+    } finally {
+      setToggling(prev => { const s = new Set(prev); s.delete(game.game_id); return s })
+    }
+  }
+
+  const hasSelection = games.some(g => g.selected)
+  const activeGames = games.filter(g => !g.tournament_end_date || !isPast(parseISO(g.tournament_end_date)))
+  const pastGames = games.filter(g => g.tournament_end_date && isPast(parseISO(g.tournament_end_date)))
+
+  function GameRow({ game }) {
+    const busy = toggling.has(game.game_id)
+    return (
+      <div className="flex items-center justify-between py-2.5">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-gray-800 leading-snug truncate">{game.tournament_title}</p>
+          <p className="text-xs text-gray-400 mt-0.5">{game.division}'s Draw</p>
+        </div>
+        <button
+          onClick={() => toggle(game)}
+          disabled={busy}
+          className={`relative shrink-0 ml-3 w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none ${
+            game.selected ? 'bg-brand-500' : 'bg-gray-200'
+          } ${busy ? 'opacity-50' : ''}`}
+          aria-label={game.selected ? 'Remove from ranking' : 'Add to ranking'}
+        >
+          <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${
+            game.selected ? 'translate-x-5' : 'translate-x-0'
+          }`} />
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card">
+      <button
+        onClick={() => setOpen(prev => !prev)}
+        className="flex items-center justify-between w-full text-left"
+      >
+        <div>
+          <h2 className="font-semibold text-gray-900">Tournament filter</h2>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {hasSelection ? 'Only selected tournaments count toward the ranking' : 'All active tournaments count toward the ranking'}
+          </p>
+        </div>
+        <svg
+          className={`w-4 h-4 text-gray-400 transition-transform shrink-0 ml-3 ${open ? 'rotate-180' : ''}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="mt-4">
+          {loading ? (
+            <div className="flex justify-center py-6">
+              <div className="animate-spin w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full" />
+            </div>
+          ) : (
+            <>
+              {!hasSelection && (
+                <p className="text-xs text-gray-400 mb-3 italic">
+                  Toggle tournaments on to limit the ranking to specific events. When none are selected, all active tournaments count.
+                </p>
+              )}
+              {activeGames.length > 0 && (
+                <div className="divide-y divide-gray-50">
+                  {activeGames.map(g => <GameRow key={g.game_id} game={g} />)}
+                </div>
+              )}
+              {pastGames.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1">Past</p>
+                  <div className="divide-y divide-gray-50">
+                    {pastGames.map(g => <GameRow key={g.game_id} game={g} />)}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function GroupDetail() {
   const { id } = useParams()
   const { user } = useAuth()
@@ -305,6 +422,9 @@ export default function GroupDetail() {
           </button>
         </div>
       </div>
+
+      {/* Tournament filter */}
+      <TournamentFilter groupId={id} />
 
       {/* Overall leaderboard */}
       {leaderboard.length === 0 ? (

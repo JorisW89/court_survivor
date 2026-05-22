@@ -5,12 +5,13 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Game, GameParticipant, Group, GroupMember, Pick, Player, Round, Tournament, TournamentRankingSnapshot, User
+from ..models import Game, GameParticipant, Group, GroupGame, GroupMember, Pick, Player, Round, Tournament, TournamentRankingSnapshot, User
 from ..models import Match as MatchModel
 from ..player_utils import normalize_player_name
 from ..schemas import (
     GroupCreate,
     GroupDetailResponse,
+    GroupGameItem,
     GroupLeaderboardEntry,
     GroupMemberResponse,
     GroupResponse,
@@ -161,13 +162,17 @@ def get_group_leaderboard(
 
     member_user_ids = {m.user_id for m in group.members}
 
-    active_games = (
-        db.query(Game)
-        .join(Tournament)
-        .filter(Game.status.in_(["upcoming", "active"]))
-        .order_by(Tournament.start_date, Game.division)
-        .all()
-    )
+    selected_game_ids = {
+        gg.game_id
+        for gg in db.query(GroupGame).filter(GroupGame.group_id == group_id).all()
+    }
+
+    games_q = db.query(Game).join(Tournament)
+    if selected_game_ids:
+        games_q = games_q.filter(Game.id.in_(selected_game_ids))
+    else:
+        games_q = games_q.filter(Game.status.in_(["upcoming", "active"]))
+    active_games = games_q.order_by(Tournament.start_date, Game.division).all()
 
     # Batch-fetch tournaments and member users up front
     tournament_ids = {game.tournament_id for game in active_games}
@@ -364,6 +369,106 @@ def get_member_picks(
         username=target_user.username,
         games=result_games,
     )
+
+
+@router.get("/{group_id}/games", response_model=list[GroupGameItem])
+def get_group_games(
+    group_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    is_member = db.query(GroupMember).filter(
+        GroupMember.group_id == group_id,
+        GroupMember.user_id == current_user.id,
+    ).first()
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Not a member of this group")
+
+    selected_ids = {
+        gg.game_id
+        for gg in db.query(GroupGame).filter(GroupGame.group_id == group_id).all()
+    }
+
+    all_games = (
+        db.query(Game)
+        .join(Tournament)
+        .order_by(Tournament.start_date.desc(), Game.division)
+        .all()
+    )
+
+    return [
+        GroupGameItem(
+            game_id=g.id,
+            tournament_title=g.tournament.title,
+            division=g.division,
+            game_status=g.status,
+            tournament_end_date=g.tournament.end_date,
+            selected=g.id in selected_ids,
+        )
+        for g in all_games
+    ]
+
+
+@router.post("/{group_id}/games/{game_id}", status_code=204)
+def add_group_game(
+    group_id: int,
+    game_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    is_member = db.query(GroupMember).filter(
+        GroupMember.group_id == group_id,
+        GroupMember.user_id == current_user.id,
+    ).first()
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Not a member of this group")
+
+    game = db.get(Game, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    existing = db.query(GroupGame).filter(
+        GroupGame.group_id == group_id,
+        GroupGame.game_id == game_id,
+    ).first()
+    if not existing:
+        db.add(GroupGame(group_id=group_id, game_id=game_id, added_by=current_user.id))
+        db.commit()
+
+
+@router.delete("/{group_id}/games/{game_id}", status_code=204)
+def remove_group_game(
+    group_id: int,
+    game_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    is_member = db.query(GroupMember).filter(
+        GroupMember.group_id == group_id,
+        GroupMember.user_id == current_user.id,
+    ).first()
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Not a member of this group")
+
+    gg = db.query(GroupGame).filter(
+        GroupGame.group_id == group_id,
+        GroupGame.game_id == game_id,
+    ).first()
+    if gg:
+        db.delete(gg)
+        db.commit()
 
 
 @router.delete("/{group_id}/leave")

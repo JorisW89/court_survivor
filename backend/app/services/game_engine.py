@@ -140,10 +140,12 @@ def evaluate_round(db: Session, round_obj: Round) -> None:
 
     player_match: dict[int, Match] = {}
     for m in matches:
-        if m.player1_id:
-            player_match[m.player1_id] = m
-        if m.player2_id:
-            player_match[m.player2_id] = m
+        for pid in (m.player1_id, m.player2_id):
+            if not pid:
+                continue
+            existing = player_match.get(pid)
+            if existing is None or (existing.winner_id is None and m.winner_id is not None):
+                player_match[pid] = m
 
     picks = db.query(Pick).filter(
         Pick.round_id == round_obj.id,
@@ -153,7 +155,11 @@ def evaluate_round(db: Session, round_obj: Round) -> None:
     for pick in picks:
         match = player_match.get(pick.player_id)
         if not match or match.winner_id is None:
-            continue  # result not in yet
+            if round_obj.status == "completed":
+                # Player withdrew or match disappeared — counts as a loss
+                pick.is_correct = False
+                pick.points_awarded = 0
+            continue
 
         participant = get_or_create_participant(db, pick.game_id, pick.user_id)
         if pick.player_id == match.winner_id:
@@ -243,10 +249,12 @@ def recalculate_game_scores(db: Session, game_id: int) -> None:
 
         player_match: dict[int, Match] = {}
         for m in matches:
-            if m.player1_id:
-                player_match[m.player1_id] = m
-            if m.player2_id:
-                player_match[m.player2_id] = m
+            for pid in (m.player1_id, m.player2_id):
+                if not pid:
+                    continue
+                existing = player_match.get(pid)
+                if existing is None or (existing.winner_id is None and m.winner_id is not None):
+                    player_match[pid] = m
 
         for participant in participants:
             pick = picks_by_round_user.get((round_obj.id, participant.user_id))
@@ -257,6 +265,11 @@ def recalculate_game_scores(db: Session, game_id: int) -> None:
 
             match = player_match.get(pick.player_id)
             if not match or match.winner_id is None:
+                if round_obj.status == "completed":
+                    # Player withdrew or match disappeared — counts as a loss
+                    streaks[participant.user_id] = 0
+                    pick.is_correct = False
+                    pick.points_awarded = 0
                 continue
 
             if pick.player_id == match.winner_id:
