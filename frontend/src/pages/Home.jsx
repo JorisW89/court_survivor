@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { isPast, parseISO } from 'date-fns'
+import { isBefore, startOfToday, parseISO } from 'date-fns'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import GameCard from '../components/GameCard'
@@ -9,7 +9,7 @@ import HowItWorks from '../components/HowItWorks'
 function isTournamentFinished(game) {
   if (game.status === 'completed') return true
   const end = game.tournament?.end_date
-  return end ? isPast(parseISO(end)) : false
+  return end ? isBefore(parseISO(end), startOfToday()) : false
 }
 
 export default function Home() {
