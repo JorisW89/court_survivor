@@ -249,6 +249,10 @@ def sync_tournaments(db: Session, data: list[dict]) -> None:
             _ensure_game(db, tournament.id, division)
             _ensure_ranking_snapshot(db, tournament.id, division)
 
+        # Remove matches that are no longer in the current draw (draw updates, player replacements)
+        current_raw_ids = {m.get("raw_id") for m in t_data.get("matches", []) if m.get("raw_id")}
+        _remove_stale_matches(db, tournament.id, current_raw_ids)
+
         # Sync matches
         for m_data in t_data.get("matches", []):
             _sync_match(db, tournament, m_data, tz_name=tournament.timezone)
@@ -391,6 +395,25 @@ def _infer_winner(score: str, p1_id: int, p2_id: int) -> Optional[int]:
     if p2_games > p1_games:
         return p2_id
     return None
+
+
+def _remove_stale_matches(db: Session, tournament_id: int, current_raw_ids: set) -> None:
+    """Delete pending matches whose psa_raw_id is no longer in the current draw.
+    Completed matches (winner set) are never deleted — they're part of the record."""
+    if not current_raw_ids:
+        return
+    stale = (
+        db.query(Match)
+        .filter(
+            Match.tournament_id == tournament_id,
+            Match.winner_id.is_(None),
+            Match.psa_raw_id.notin_(current_raw_ids),
+        )
+        .all()
+    )
+    for m in stale:
+        print(f"[sync] Removing stale match id={m.id} raw_id={m.psa_raw_id} (no longer in draw)")
+        db.delete(m)
 
 
 def _update_round_deadlines(db: Session, tournament_id: int) -> None:
